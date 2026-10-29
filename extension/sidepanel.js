@@ -29,6 +29,7 @@
 
   async function showTemu(state) {
     activeMode = 'temu';
+    document.body.classList.remove('collector-mode');
     contextLabel.textContent = 'Temu 找货';
     document.body.classList.toggle('compact', (await settings()).compactResults);
     content.replaceChildren();
@@ -159,6 +160,7 @@
 
   async function showTikTok(state) {
     activeMode = 'tiktok';
+    document.body.classList.add('collector-mode');
     contextLabel.textContent = 'TikTok';
     document.body.classList.remove('compact');
     content.replaceChildren();
@@ -184,9 +186,9 @@
     const pause = actionButton(state.paused ? '继续' : '暂停', '', () => sendTikTokAction('pause'));
     pause.disabled = !state.canPause;
     const next = actionButton(state.nextLabel || '采集下一页', '', () => sendTikTokAction('next'));
-    next.classList.add('wide'); next.disabled = !state.canNext;
+    next.disabled = !state.canNext;
     const exportButton = actionButton('导出 JSON', '', () => sendTikTokAction('export'));
-    exportButton.classList.add('wide'); exportButton.disabled = !state.canExport;
+    exportButton.disabled = !state.canExport;
     actions.append(start, pause, next, exportButton);
     content.append(actions, h('p', 'hint', state.hint || '翻页由你手动确认；采集不会自动连续翻页。'));
     const details = h('details');
@@ -215,6 +217,7 @@
   }
 
   function renderUnsupported(message) {
+    document.body.classList.remove('collector-mode');
     content.replaceChildren();
     const box = h('section', 'empty');
     box.append(h('strong', '', '当前页面没有可用功能'), h('p', '', message || '打开 Temu 商品列表或 TikTok Seller Center 商品管理页后，功能会自动识别。'));

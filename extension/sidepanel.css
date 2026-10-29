@@ -56,3 +56,19 @@ body.compact .supplier-title{margin-bottom:3px;font-size:11px;-webkit-line-clamp
 body.compact .supplier-price{margin-bottom:2px;font-size:13px}
 body.compact .supplier-meta{font-size:10px}
 @media(min-width:620px){main{padding:14px}.supplier-card{grid-template-columns:minmax(108px,120px) minmax(0,1fr)}.supplier-image,.image-placeholder{max-width:120px}body.compact .supplier-card{grid-template-columns:minmax(96px,104px) minmax(0,1fr)}body.compact .supplier-image,body.compact .image-placeholder{max-width:104px}}
+body.collector-mode main{padding:8px}
+body.collector-mode .brand{gap:8px;padding:8px 11px}
+body.collector-mode .brand img{width:25px;height:25px}
+body.collector-mode .feature-head{margin:0 1px 6px}
+body.collector-mode .feature-head h1{font-size:14px}
+body.collector-mode .collector-status{margin-bottom:6px;padding:6px 8px;font-size:12px}
+body.collector-mode .metrics{gap:5px;margin-bottom:7px}
+body.collector-mode .metric{padding:5px 7px}
+body.collector-mode .metric span{font-size:10px}
+body.collector-mode .metric strong{font-size:14px}
+body.collector-mode .collector-actions{gap:5px}
+body.collector-mode .collector-actions .action{min-height:30px;padding:5px 7px;font-size:12px}
+body.collector-mode .hint{margin-top:7px;font-size:10px;line-height:1.35}
+body.collector-mode details{margin-top:7px;padding-top:6px}
+body.collector-mode summary{font-size:12px}
+body.collector-mode .logs{max-height:140px}
