@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   buildSearchUrl,
+  classifyImageProbe,
   findImageSession,
   md5,
   mergeOfficialResults,
@@ -11,6 +12,7 @@ import {
   parseResponseText,
   parseSearchResponseText,
   SearchFailure,
+  sniffImageFormat,
 } from '../extension/core.mjs';
 
 test('MD5 matches the standard signing vector', () => {
@@ -96,4 +98,13 @@ test('official URLs carry only the returned image search session identifiers', (
   const pageUrl = new URL(officialSearchPageUrl(session));
   assert.equal(pageUrl.origin, 'https://air.1688.com');
   assert.equal(pageUrl.searchParams.get('imageIdList'), session.image_id);
+});
+
+test('image diagnostics identify common file formats and response failures', () => {
+  assert.equal(sniffImageFormat(Uint8Array.from([0xff, 0xd8, 0xff, 0x00])), 'JPEG');
+  assert.equal(sniffImageFormat(Uint8Array.from([0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x45, 0x42, 0x50])), 'WebP');
+  assert.equal(classifyImageProbe({ status: 403 }).state, 'forbidden');
+  assert.equal(classifyImageProbe({ status: 200, contentType: 'text/html' }).state, 'not_image');
+  assert.equal(classifyImageProbe({ status: 200, contentType: 'image/avif', signature: 'JPEG' }).state, 'type_mismatch');
+  assert.equal(classifyImageProbe({ status: 206, contentType: 'image/jpeg', signature: 'JPEG' }).state, 'image_accessible');
 });

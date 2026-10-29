@@ -1,5 +1,6 @@
 (() => {
-  const IMAGE_HOSTS = new Set(['img.kwcdn.com', 'aimg.kwcdn.com']);
+  const IMAGE_HOSTS = new Set(['img.kwcdn.com', 'img-eu.kwcdn.com', 'aimg.kwcdn.com']);
+  const MAX_IMAGE_DIAGNOSTICS = 12;
   const PRICE_PATTERN = /(?:£|\$|€|¥|￥)\s*\d[\d,.]*/;
   let routeUrl = location.href;
   let root;
@@ -13,10 +14,19 @@
   let actionsNode;
   let cardsNode;
   let resultsCountNode;
+  let diagnosticsNode;
+  let diagnosticsCountNode;
+  let diagnosticsPreNode;
+  let diagnosticsCopyButton;
   let activeImage;
+  let activeHoverTarget;
   let activeProduct;
-  let hideTimer;
+  let lastPointerX = 0;
+  let lastPointerY = 0;
   let currentRequestId;
+  let imageDiagnostics = [];
+  let imageDiagnosticsByUrl = new Map();
+  let imageProbeCount = 0;
   let supported = false;
   const state = {
     open: false,
@@ -59,14 +69,14 @@
         .icon:hover, .icon:focus-visible { transform: scale(1.08); outline: 2px solid #1e7658; outline-offset: 1px; }
         .icon svg { width: 16px; height: 16px; }
         .panel, .rail {
-          position: fixed; left: 0; top: 0; height: 100vh; color: #202822; background: #fff;
-          box-shadow: 5px 0 24px rgba(20, 35, 28, .18); pointer-events: auto;
+          position: fixed; right: 0; top: 0; height: 100vh; color: #202822; background: #fff;
+          box-shadow: -5px 0 24px rgba(20, 35, 28, .18); pointer-events: auto;
           font: 13px/1.45 Arial, "Microsoft YaHei", sans-serif;
         }
         .panel { display: flex; flex-direction: column; width: min(360px, 94vw); max-width: 360px; }
         .rail {
           display: flex; align-items: center; justify-content: center; width: 42px; cursor: pointer;
-          border: 0; border-right: 1px solid #e7ece8; color: #21543f; background: #f7faf8;
+          border: 0; border-left: 1px solid #e7ece8; color: #21543f; background: #f7faf8;
           font-weight: 700; letter-spacing: .04em; writing-mode: vertical-rl;
         }
         .header {
@@ -98,6 +108,12 @@
         .action.primary { color: #fff; border-color: #26734f; background: #26734f; }
         .action:hover { filter: brightness(.97); }
         .count { margin: 5px 1px 8px; color: #6c7770; font-size: 11px; }
+        .diagnostics { margin: 0 0 10px; padding: 8px; border: 1px solid #e9ddd1; border-radius: 8px; background: #fffaf5; }
+        .diagnostic-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: #77522c; font-size: 11px; }
+        .diagnostics .action { min-height: 27px; padding: 4px 7px; font-size: 10px; }
+        .diagnostics details { margin-top: 7px; color: #685b4e; font-size: 10px; }
+        .diagnostics summary { cursor: pointer; }
+        .diagnostics pre { max-height: 220px; overflow: auto; margin: 6px 0 0; color: #4d463f; font: 10px/1.4 Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
         .cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
         .card {
           min-width: 0; overflow: hidden; padding: 0; border: 1px solid #e6ebe7; border-radius: 9px;
@@ -113,7 +129,7 @@
         .meta { display: flex; flex-direction: column; gap: 2px; color: #657068; font-size: 10px; }
         .supplier { overflow: hidden; margin-top: 6px; color: #42554a; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
         .badge { display: inline-block; max-width: 100%; overflow: hidden; margin: 5px 3px 0 0; padding: 2px 5px; border-radius: 4px; color: #486453; background: #eff5f0; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
-        .icon[hidden], .panel[hidden], .rail[hidden], .actions[hidden], .disclaimer[hidden], .count[hidden] { display: none !important; }
+        .icon[hidden], .panel[hidden], .rail[hidden], .actions[hidden], .disclaimer[hidden], .count[hidden], .diagnostics[hidden] { display: none !important; }
         @media (max-width: 320px) { .panel { width: 100vw; } .cards { grid-template-columns: 1fr; } }
       </style>
       <button class="icon" type="button" aria-label="在1688按图搜索" title="在1688按图搜索">
@@ -132,6 +148,10 @@
           <p class="disclaimer" hidden></p>
           <div class="actions" hidden></div>
           <p class="count" hidden></p>
+          <section class="diagnostics" hidden aria-label="货源图片加载诊断">
+            <div class="diagnostic-head"><span class="diagnostic-count"></span><button class="action diagnostic-copy" type="button">复制诊断信息</button></div>
+            <details><summary>查看图片失败原因</summary><pre></pre></details>
+          </section>
           <div class="cards"></div>
         </div>
       </aside>
@@ -147,11 +167,13 @@
     actionsNode = shadow.querySelector('.actions');
     cardsNode = shadow.querySelector('.cards');
     resultsCountNode = shadow.querySelector('.count');
+    diagnosticsNode = shadow.querySelector('.diagnostics');
+    diagnosticsCountNode = shadow.querySelector('.diagnostic-count');
+    diagnosticsPreNode = shadow.querySelector('.diagnostics pre');
+    diagnosticsCopyButton = shadow.querySelector('.diagnostic-copy');
 
-    icon.addEventListener('pointerenter', () => clearTimeout(hideTimer));
-    icon.addEventListener('pointerleave', hideIconSoon);
-    icon.addEventListener('focus', () => clearTimeout(hideTimer));
-    icon.addEventListener('blur', hideIconSoon);
+    icon.addEventListener('pointerleave', hideIcon);
+    icon.addEventListener('blur', hideIcon);
     icon.addEventListener('click', (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -168,6 +190,15 @@
       state.open = true;
       render();
     });
+    diagnosticsCopyButton.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(JSON.stringify(imageDiagnostics, null, 2));
+        diagnosticsCopyButton.textContent = '已复制';
+      } catch {
+        diagnosticsCopyButton.textContent = '复制受限，可展开后手动复制';
+        diagnosticsNode.querySelector('details').open = true;
+      }
+    });
     render();
   }
 
@@ -180,7 +211,8 @@
     if (isImage && (media.naturalWidth < 120 || media.naturalHeight < 120)) return undefined;
     const ratio = rect.width / rect.height;
     if (ratio < 0.75 || ratio > 1.35) return undefined;
-    if (getComputedStyle(media).visibility === 'hidden' || getComputedStyle(media).display === 'none') return undefined;
+    const mediaStyle = getComputedStyle(media);
+    if (mediaStyle.visibility === 'hidden' || mediaStyle.display === 'none' || Number(mediaStyle.opacity) < 0.05) return undefined;
 
     const imageUrl = isImage
       ? media.currentSrc || media.getAttribute('data-src') || media.getAttribute('src') || ''
@@ -218,6 +250,43 @@
     return { image: media, imageUrl: parsedImage.href, title, card };
   }
 
+  function getCandidateAtPointer(target, x, y) {
+    if (target instanceof HTMLImageElement || target instanceof HTMLVideoElement) {
+      const direct = getCandidate(target);
+      if (direct) return direct;
+    }
+    const seen = new Set();
+    for (let node = target, depth = 0; node && depth < 9 && node !== document.body; node = node.parentElement, depth += 1) {
+      const media = [];
+      if (node instanceof HTMLImageElement || node instanceof HTMLVideoElement) media.push(node);
+      for (const descendant of node.querySelectorAll('img, video[poster]')) {
+        if (media.length >= 8) break;
+        media.push(descendant);
+      }
+      const candidates = [];
+      for (const element of media) {
+        if (seen.has(element)) continue;
+        seen.add(element);
+        const rect = element.getBoundingClientRect();
+        if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) continue;
+        const candidate = getCandidate(element);
+        if (candidate) candidates.push(candidate);
+      }
+      if (candidates.length) {
+        candidates.sort((a, b) => {
+          const aRect = a.image.getBoundingClientRect();
+          const bRect = b.image.getBoundingClientRect();
+          const areaDifference = (bRect.width * bRect.height) - (aRect.width * aRect.height);
+          if (Math.abs(areaDifference) > 1) return areaDifference;
+          return (b.image.naturalWidth || 0) - (a.image.naturalWidth || 0);
+        });
+        return candidates[0];
+      }
+      if (node.querySelectorAll('img, video[poster]').length > 8) break;
+    }
+    return undefined;
+  }
+
   function isProductLink(href) {
     try {
       const url = new URL(href, location.href);
@@ -234,14 +303,16 @@
     return String(value || '').replace(/^\s*(?:商品图片|image|img)\s*/i, '').replace(/\s+/g, ' ').trim();
   }
 
-  function setActiveImage(image) {
-    activeImage = image;
-    const product = getCandidate(image);
+  function setActiveImage(target, x, y) {
+    activeHoverTarget = target;
+    const product = getCandidateAtPointer(target, x, y);
     if (!supported || !product) {
+      activeImage = undefined;
       activeProduct = undefined;
       hideIcon(false);
       return;
     }
+    activeImage = product.image;
     activeProduct = product;
     positionIcon();
     icon.hidden = false;
@@ -260,36 +331,30 @@
   function hideIcon(clearTarget = true) {
     if (!icon) return;
     icon.style.display = 'none';
-    if (clearTarget) activeImage = undefined;
+    if (clearTarget) {
+      activeImage = undefined;
+      activeHoverTarget = undefined;
+    }
     activeProduct = undefined;
-  }
-
-  function hideIconSoon() {
-    clearTimeout(hideTimer);
-    hideTimer = setTimeout(() => {
-      hideIcon();
-    }, 650);
   }
 
   function onPointerOver(event) {
     if (!supported || !event.target || (root && root.contains(event.target))) return;
-    if (event.target instanceof HTMLImageElement || event.target instanceof HTMLVideoElement) {
-      clearTimeout(hideTimer);
-      setActiveImage(event.target);
-    }
+    lastPointerX = event.clientX;
+    lastPointerY = event.clientY;
+    setActiveImage(event.target, lastPointerX, lastPointerY);
   }
 
   function onPointerOut(event) {
-    if (event.target !== activeImage) return;
+    if (event.target !== activeHoverTarget) return;
     const related = event.relatedTarget;
     if (related === root || related === icon || (related instanceof Node && root?.contains(related))) return;
-    hideIconSoon();
+    hideIcon();
   }
 
   async function startSearch(product) {
     if (!supported || !product?.imageUrl) return;
     ensureUi();
-    clearTimeout(hideTimer);
     state.open = true;
     state.collapsed = false;
     state.phase = 'preparing';
@@ -299,6 +364,9 @@
     state.disclaimer = '只展示图片相似货源，不代表完全同款或库存已确认。';
     state.issue = undefined;
     currentRequestId = crypto.randomUUID();
+    imageDiagnostics = [];
+    imageDiagnosticsByUrl = new Map();
+    imageProbeCount = 0;
     const requestId = currentRequestId;
     hideIcon();
     render();
@@ -335,6 +403,7 @@
     cardsNode.replaceChildren(...state.results.map(createCard));
     resultsCountNode.hidden = !state.results.length;
     resultsCountNode.textContent = state.results.length ? `${state.results.length} 个相似货源` : '';
+    renderImageDiagnostics();
 
     actionsNode.replaceChildren();
     const needsActions = ['needs-auth', 'failed', 'empty'].includes(state.phase);
@@ -381,14 +450,15 @@
       image.loading = 'lazy';
       image.referrerPolicy = 'no-referrer';
       image.alt = item.title || '1688 商品图片';
-      image.src = imageUrl;
       image.addEventListener('error', () => {
+        recordImageFailure(item, imageUrl);
         const placeholder = document.createElement('div');
         placeholder.className = 'image-placeholder';
-        placeholder.textContent = '商品图片暂不可用';
+        placeholder.textContent = '图片加载失败 · 可查看诊断';
         image.replaceWith(placeholder);
       }, { once: true });
       card.append(image);
+      image.src = imageUrl;
     } else {
       const placeholder = document.createElement('div');
       placeholder.className = 'image-placeholder';
@@ -439,6 +509,54 @@
     return card;
   }
 
+  function recordImageFailure(item, imageUrl) {
+    let parsedUrl;
+    try { parsedUrl = new URL(imageUrl); } catch { return; }
+    let record = imageDiagnosticsByUrl.get(imageUrl);
+    if (record) {
+      record.occurrences += 1;
+      renderImageDiagnostics();
+      return;
+    }
+    record = {
+      offerId: String(item.offer_id || ''),
+      title: cleanTitle(item.title || '').slice(0, 100),
+      image: { host: parsedUrl.hostname, path: parsedUrl.pathname },
+      pageImageLoad: 'error',
+      occurrences: 1,
+      probe: { state: 'checking', message: '正在核对图片服务返回的数据…' },
+    };
+    imageDiagnosticsByUrl.set(imageUrl, record);
+    imageDiagnostics.push(record);
+    renderImageDiagnostics();
+
+    if (imageProbeCount >= MAX_IMAGE_DIAGNOSTICS) {
+      record.probe = { state: 'skipped', message: `已达到单次搜索 ${MAX_IMAGE_DIAGNOSTICS} 张图片的诊断上限；浏览器图片错误仍已记录。` };
+      renderImageDiagnostics();
+      return;
+    }
+    imageProbeCount += 1;
+    const requestId = currentRequestId;
+    void chrome.runtime.sendMessage({ type: 'DIAGNOSE_1688_IMAGE', imageUrl })
+      .then((response) => {
+        if (requestId !== currentRequestId || imageDiagnosticsByUrl.get(imageUrl) !== record) return;
+        record.probe = response?.result || { state: 'error', message: response?.error || '诊断请求没有返回结果。' };
+        renderImageDiagnostics();
+      })
+      .catch((error) => {
+        if (requestId !== currentRequestId || imageDiagnosticsByUrl.get(imageUrl) !== record) return;
+        record.probe = { state: 'error', message: error?.name === 'TypeError' ? '无法连接扩展后台，请重新加载插件后再试。' : '扩展后台无法完成图片诊断。' };
+        renderImageDiagnostics();
+      });
+  }
+
+  function renderImageDiagnostics() {
+    if (!diagnosticsNode) return;
+    diagnosticsNode.hidden = imageDiagnostics.length === 0;
+    diagnosticsCountNode.textContent = `货源图加载失败 ${imageDiagnostics.length} 张`;
+    diagnosticsPreNode.textContent = JSON.stringify(imageDiagnostics, null, 2);
+  }
+
   function safeHttpsUrl(value) {
     try {
       const url = new URL(value);
@@ -481,7 +599,7 @@
   document.addEventListener('pointerover', onPointerOver, true);
   document.addEventListener('pointerout', onPointerOut, true);
   document.addEventListener('load', (event) => {
-    if (event.target === activeImage) setActiveImage(activeImage);
+    if (event.target === activeImage && activeHoverTarget) setActiveImage(activeHoverTarget, lastPointerX, lastPointerY);
   }, true);
   window.addEventListener('scroll', positionIcon, { capture: true, passive: true });
   window.addEventListener('resize', positionIcon, { passive: true });

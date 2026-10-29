@@ -334,4 +334,39 @@ export function mergeOfficialResults(apiResults, officialResults) {
   return merged.concat(apiResults.filter((item) => !officialIds.has(item.offer_id)));
 }
 
+export function sniffImageFormat(input) {
+  const bytes = input instanceof Uint8Array ? input : new Uint8Array(input || []);
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'JPEG';
+  if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return 'PNG';
+  if (bytes.length >= 6 && [0x47, 0x49, 0x46, 0x38].every((byte, index) => bytes[index] === byte)) return 'GIF';
+  if (bytes.length >= 12 && String.fromCharCode(...bytes.slice(0, 4)) === 'RIFF' && String.fromCharCode(...bytes.slice(8, 12)) === 'WEBP') return 'WebP';
+  if (bytes.length >= 12 && String.fromCharCode(...bytes.slice(4, 8)) === 'ftyp') {
+    const brands = String.fromCharCode(...bytes.slice(8, 12));
+    if (/^(?:avif|avis)$/.test(brands)) return 'AVIF';
+    if (/^(?:heic|heix|hevc|hevx|mif1|msf1)$/.test(brands)) return 'HEIF';
+  }
+  if (bytes.length >= 2 && bytes[0] === 0x42 && bytes[1] === 0x4d) return 'BMP';
+  const prefix = String.fromCharCode(...bytes.slice(0, 256)).replace(/^\uFEFF?\s*/, '').toLowerCase();
+  if (prefix.startsWith('<svg') || (prefix.startsWith('<?xml') && prefix.includes('<svg'))) return 'SVG';
+  return 'unknown';
+}
+
+export function classifyImageProbe({ status, contentType = '', signature = 'unknown' }) {
+  const mime = String(contentType).split(';', 1)[0].trim().toLowerCase();
+  if (status === 401) return { state: 'unauthorized', message: '图片服务返回 401，要求身份验证或访问凭证。' };
+  if (status === 403) return { state: 'forbidden', message: '图片服务返回 403，拒绝了图片请求；可能是防盗链或临时访问限制。' };
+  if (status === 404) return { state: 'not_found', message: '图片服务返回 404，图片地址已失效或资源不存在。' };
+  if (status === 429) return { state: 'rate_limited', message: '图片服务返回 429，当前请求触发频率限制。' };
+  if (!Number.isFinite(status) || status < 200 || status >= 300) return { state: 'http_error', message: `图片服务返回 HTTP ${Number.isFinite(status) ? status : '未知错误'}。` };
+  if (!mime.startsWith('image/')) return { state: 'not_image', message: `HTTP 请求成功，但返回类型是 ${mime || '未知'}，内容不是图片。常见原因是防盗链、登录页或错误页。` };
+  if (signature === 'unknown') return { state: 'image_unverified', message: 'HTTP 请求成功且声明为图片，但暂未识别文件格式头；需要结合浏览器解码结果判断。' };
+  const expected = {
+    'image/jpeg': ['JPEG'], 'image/jpg': ['JPEG'], 'image/png': ['PNG'], 'image/gif': ['GIF'],
+    'image/webp': ['WebP'], 'image/avif': ['AVIF'], 'image/heic': ['HEIF'], 'image/heif': ['HEIF'],
+    'image/svg+xml': ['SVG'], 'image/bmp': ['BMP'],
+  }[mime];
+  if (expected && !expected.includes(signature)) return { state: 'type_mismatch', message: `响应声明为 ${mime}，文件格式头却是 ${signature}，类型不匹配。` };
+  return { state: 'image_accessible', message: `图片服务返回 HTTP ${status} 和 ${signature} 图片数据；浏览器页面仍加载失败时，应重点检查页面侧策略或图片解码。` };
+}
+
 export const IMAGE_SEARCH_ENDPOINTS = Object.freeze({ upload: IMAGE_UPLOAD_URL, uploadApi: IMAGE_UPLOAD_API, appKey: MTOP_APP_KEY });

@@ -11,6 +11,8 @@ const server = createServer((request, response) => {
   response.end(page);
 });
 
-server.listen(4173, '127.0.0.1', () => {
-  process.stdout.write('Temu structure mock: http://127.0.0.1:4173/uk-zh-Hans/tablets-laptops-accessories-o3-2872.html?storesnapperTest=1\n');
+const host = process.env.TEMU_MOCK_HOST || '127.0.0.1';
+const port = Number(process.env.TEMU_MOCK_PORT || 4173);
+server.listen(port, host, () => {
+  process.stdout.write(`Temu structure mock: http://${host}:${port}/uk-zh-Hans/tablets-laptops-accessories-o3-2872.html?storesnapperTest=1\n`);
 });

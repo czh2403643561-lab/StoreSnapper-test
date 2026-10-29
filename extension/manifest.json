@@ -1,13 +1,15 @@
 {
   "manifest_version": 3,
   "name": "StoreSnapper · Temu 1688 找货",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "在 Temu 分类和搜索商品列表中用主图搜索 1688 相似货源。",
   "permissions": ["cookies", "scripting", "tabs"],
   "host_permissions": [
     "https://www.temu.com/*",
     "https://img.kwcdn.com/*",
+    "https://img-eu.kwcdn.com/*",
     "https://aimg.kwcdn.com/*",
+    "https://cbu01.alicdn.com/*",
     "https://h5api.m.1688.com/*",
     "https://search.1688.com/*",
     "https://air.1688.com/*",

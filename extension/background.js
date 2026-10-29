@@ -1,6 +1,7 @@
 import {
   SearchFailure,
   buildSearchUrl,
+  classifyImageProbe,
   md5,
   mergeOfficialResults,
   normalizeOfficialOffer,
@@ -8,14 +9,22 @@ import {
   parseImageSessionResponse,
   parseResponseText,
   parseSearchResponseText,
+  sniffImageFormat,
 } from './core.mjs';
 
 const jobsByTab = new Map();
-const IMAGE_HOSTS = new Set(['img.kwcdn.com', 'aimg.kwcdn.com']);
+const IMAGE_HOSTS = new Set(['img.kwcdn.com', 'img-eu.kwcdn.com', 'aimg.kwcdn.com']);
+const DIAGNOSTIC_IMAGE_HOSTS = new Set(['cbu01.alicdn.com']);
 const LOGIN_URL = 'https://login.1688.com/member/signin.htm?Done=https%3A%2F%2Fwww.1688.com%2F';
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || typeof message.type !== 'string') return false;
+  if (message.type === 'DIAGNOSE_1688_IMAGE') {
+    void diagnose1688Image(message.imageUrl)
+      .then((result) => sendResponse({ ok: true, result }))
+      .catch(() => sendResponse({ ok: false, error: '无法完成货源图片诊断。' }));
+    return true;
+  }
   if (message.type === 'SEARCH_IMAGE') {
     const tabId = sender.tab?.id;
     if (tabId === undefined) {
@@ -51,6 +60,80 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   return false;
 });
+
+async function diagnose1688Image(imageUrl) {
+  let url;
+  try {
+    if (typeof imageUrl !== 'string' || imageUrl.length > 4096) throw new TypeError('Invalid image URL');
+    url = new URL(imageUrl);
+  } catch {
+    return { state: 'invalid_url', message: '图片地址格式无效。' };
+  }
+  if (url.protocol !== 'https:' || url.username || url.password || url.port || !DIAGNOSTIC_IMAGE_HOSTS.has(url.hostname)) {
+    return { state: 'not_probed', message: '此图片域名暂未开放自动探测；已记录域名和路径，未向其发送诊断请求。' };
+  }
+
+  const request = { host: url.hostname, path: url.pathname };
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+  try {
+    const response = await fetch(url.href, {
+      method: 'GET',
+      headers: { Range: 'bytes=0-255' },
+      credentials: 'omit',
+      referrerPolicy: 'no-referrer',
+      cache: 'no-store',
+      redirect: 'follow',
+      signal: controller.signal,
+    });
+    let prefix = new Uint8Array();
+    if (response.body) {
+      const reader = response.body.getReader();
+      try {
+        const chunk = await reader.read();
+        prefix = (chunk.value || new Uint8Array()).slice(0, 512);
+      } finally {
+        await reader.cancel().catch(() => undefined);
+      }
+    }
+    const contentType = response.headers.get('content-type') || '';
+    const signature = sniffImageFormat(prefix);
+    const diagnosis = classifyImageProbe({ status: response.status, contentType, signature });
+    const finalUrl = response.url ? new URL(response.url) : url;
+    const bodyText = contentType.toLowerCase().includes('text/') || contentType.toLowerCase().includes('html')
+      ? new TextDecoder().decode(prefix).toLowerCase()
+      : '';
+    const bodyMarker = /captcha|verify|security|challenge|安全验证|访问受限/.test(bodyText)
+      ? 'security_challenge_or_verification_page'
+      : /access denied|forbidden|hotlink|referer/.test(bodyText) ? 'access_or_hotlink_error_page' : '';
+    return {
+      ...diagnosis,
+      checkedAt: new Date().toISOString(),
+      request,
+      status: response.status,
+      contentType: contentType.split(';', 1)[0].trim() || 'unknown',
+      contentLength: response.headers.get('content-length') || 'unknown',
+      contentRange: response.headers.get('content-range') || 'unknown',
+      capturedBytes: prefix.length,
+      signature,
+      redirected: response.redirected,
+      finalUrl: { host: finalUrl.hostname, path: finalUrl.pathname },
+      bodyMarker: bodyMarker || undefined,
+    };
+  } catch (error) {
+    return {
+      state: error?.name === 'AbortError' ? 'timeout' : 'network_error',
+      message: error?.name === 'AbortError'
+        ? '图片诊断请求超时（8 秒）；可能是网络连接或图片服务无响应。'
+        : '图片诊断请求未收到 HTTP 响应；可能是网络、浏览器策略或图片服务连接失败。',
+      checkedAt: new Date().toISOString(),
+      request,
+      errorName: error?.name || 'Error',
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   const sourceJob = jobsByTab.get(tabId);
