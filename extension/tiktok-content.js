@@ -623,7 +623,7 @@
     const collectorPage = state.workbench?.page('tiktok');
     if (collectorPage) collectorPage.classList.add('collector-page');
     const temuPage = state.workbench?.page('temu');
-    if (temuPage) temuPage.innerHTML = '<h1 class="wb-title">Temu 找货</h1><p class="wb-subtitle">仅在 Temu 分类页和搜索结果页提供图片搜货。</p><div class="inactive">当前打开的是 TikTok Seller Center。<a href="https://www.temu.com/" target="_blank" rel="noopener noreferrer">打开 Temu 商品列表</a></div>';
+    if (temuPage) temuPage.innerHTML = '<h1 class="wb-title">Temu 找货</h1><p class="wb-subtitle">支持首页、闪购、类目和搜索页的商品卡片主图。</p><div class="inactive">当前打开的是 TikTok Seller Center。<a href="https://www.temu.com/" target="_blank" rel="noopener noreferrer">打开 Temu 商品列表</a></div>';
     state.workbench?.setLogsProvider(() => state.logs);
     state.workbench?.setSummaryProvider(() => {
       const count = Object.keys(state.session?.products || {}).length;
@@ -639,7 +639,6 @@
     state.workbench?.refreshSummary();
     state.workbench?.refreshLogs();
     const expanded = state.panelExpanded;
-    const minimized = state.panelMinimized;
     const snapshot = pageSnapshot();
     const page = snapshot?.paginationState;
     const nativeNext = snapshot ? findNextControl(snapshot.pagination) : null;
@@ -678,11 +677,10 @@
       :host{all:initial;font:13px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#24312e}
       *{box-sizing:border-box}button{font:inherit;cursor:pointer}button:disabled{cursor:not-allowed;opacity:.48}
       .collector-launcher{display:inline-block;border:0;border-radius:20px;background:#087e78;color:#fff;padding:10px 14px;box-shadow:0 4px 18px #172b2a33;font-weight:650}
-      .panel{display:none;width:100%;max-height:none;background:#fff;border:0;border-radius:0;box-shadow:none;overflow:hidden}
-      .panel.expanded{display:flex;flex-direction:column}.panel.expanded.minimized{max-height:none;overflow:visible}.panel.expanded.minimized .body{display:none}.head{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border-bottom:1px solid #edf0ef;background:#fbfcfc}
-      .title{font-size:14px;font-weight:700}.sub{font-size:11px;color:#72807c;margin-top:2px}.head-actions{display:flex;gap:5px}.icon{border:1px solid #dce4e2;background:#fff;border-radius:7px;min-width:30px;height:30px;color:#52615d}
-      .body{max-height:calc(100vh - 132px);padding:12px 14px;overflow:auto}.summary{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px}.metric{border:1px solid #edf0ef;border-radius:8px;padding:8px 9px}.metric span{display:block;font-size:11px;color:#788580}.metric strong{font-size:15px}.status{margin:0 0 10px;padding:8px 10px;border-radius:8px;background:#f2f6f5;color:#41514d}.status[data-kind="needs_review"],.status[data-kind="error"]{background:#fff4e8;color:#865211}.status[data-kind="all_complete"],.status[data-kind="page_complete"]{background:#eaf6f0;color:#216b48}
-      .actions{display:grid;grid-template-columns:1fr 1fr;gap:7px}.action{border:1px solid #d5e1de;background:#fff;color:#28544e;border-radius:8px;padding:8px}.primary{background:#087e78;border-color:#087e78;color:#fff}.wide{grid-column:1/-1}.hint{font-size:11px;color:#7a8581;margin:9px 0 0}
+      .panel{display:none;width:100%;max-height:calc(100vh - 88px);background:#fff;border:0;border-radius:0;box-shadow:none;overflow:hidden}
+      .panel.expanded{display:block}.mode-heading{padding:12px 14px 0;font-size:14px;font-weight:750;color:#24312e}
+      .body{max-height:calc(100vh - 130px);padding:10px 14px 14px;overflow:auto}.summary{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px}.metric{border:1px solid #edf0ef;border-radius:8px;padding:8px 9px}.metric span{display:block;font-size:12px;color:#586761;font-weight:550}.metric strong{font-size:16px;font-weight:750}.status{margin:0 0 10px;padding:8px 10px;border-radius:8px;background:#f2f6f5;color:#344740;font-weight:600}.status[data-kind="needs_review"],.status[data-kind="error"]{background:#fff4e8;color:#865211}.status[data-kind="all_complete"],.status[data-kind="page_complete"]{background:#eaf6f0;color:#216b48}
+      .actions{display:grid;grid-template-columns:1fr 1fr;gap:7px}.action{border:1px solid #d5e1de;background:#fff;color:#28544e;border-radius:8px;padding:9px;font-weight:650}.primary{background:#087e78;border-color:#087e78;color:#fff}.wide{grid-column:1/-1}.hint{font-size:12px;font-weight:500;color:#53635e;margin:9px 0 0}
       details{margin-top:11px;border-top:1px solid #edf0ef;padding-top:8px}summary{cursor:pointer;font-weight:600;color:#53625d}.logbar{display:flex;gap:6px;margin:7px 0}.logbar button{border:1px solid #dce4e2;background:#fff;border-radius:6px;padding:4px 8px;font-size:11px}.logs{max-height:150px;overflow:auto;font:10px/1.45 ui-monospace,Consolas,monospace;color:#66736f;white-space:pre-wrap}
       @media(max-width:420px){.panel{width:100%}}
     `;
@@ -696,28 +694,12 @@
     launcher.setAttribute('aria-label', '打开 TikTok 商品管理采集');
     target.append(launcher);
     const panel = document.createElement('section');
-    panel.className = `panel${expanded ? ' expanded' : ''}${minimized ? ' minimized' : ''}`;
+    panel.className = `panel${expanded ? ' expanded' : ''}`;
     panel.setAttribute('aria-label', 'TikTok 商品管理采集');
-    const head = document.createElement('header');
-    head.className = 'head';
-    const heading = document.createElement('div');
-    heading.innerHTML = '<div class="title">TikTok 商品管理采集</div><div class="sub">仅采集当前商品管理页</div>';
-    const headActions = document.createElement('div');
-    headActions.className = 'head-actions';
-    const minimize = button(minimized ? '+' : '−', () => {
-      state.panelMinimized = !state.panelMinimized;
-      void persist();
-      render();
-    }, 'collapse', 'icon');
-    minimize.setAttribute('aria-label', minimized ? '展开采集面板' : '收起采集面板');
-    headActions.append(minimize);
-    headActions.append(button('×', () => {
-      state.panelExpanded = false;
-      void persist();
-      render();
-    }, 'close', 'icon'));
-    head.append(heading, headActions);
-    panel.append(head);
+    const modeHeading = document.createElement('div');
+    modeHeading.className = 'mode-heading';
+    modeHeading.textContent = 'TikTok 商品管理采集';
+    panel.append(modeHeading);
     const body = document.createElement('div');
     body.className = 'body';
     const status = document.createElement('div');
@@ -800,6 +782,36 @@
   }
 
   const observer = new MutationObserver(scheduleRecognition);
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message?.type === 'STORESNAPPER_GET_CONTEXT' && message.mode === 'tiktok') {
+      // Seller Center may render the heading and semantic table after the URL
+      // becomes available. Give the live page a short chance to finish rendering
+      // before the toolbar popup decides whether this is the collection page.
+      void (async () => {
+        const deadline = Date.now() + 1800;
+        while (!isTargetPage() && Date.now() < deadline) await wait(150);
+        sendResponse({ ok: true, recognized: isTargetPage(), mode: 'tiktok' });
+      })();
+      return true;
+    }
+    if (message?.type !== 'STORESNAPPER_OPEN_WORKBENCH' || message.mode !== 'tiktok') return false;
+    void (async () => {
+      try {
+        if (!state.restoreDone) await restore();
+        state.panelExpanded = true;
+        state.panelMinimized = false;
+        await persist();
+        ensureUi();
+        state.workbench?.setPage('tiktok');
+        state.workbench?.setExpanded(true);
+        render();
+        sendResponse({ ok: true, mode: 'tiktok' });
+      } catch {
+        sendResponse({ ok: false, error: '无法打开 TikTok 采集工作台。' });
+      }
+    })();
+    return true;
+  });
   observer.observe(document.documentElement, { subtree: true, childList: true });
   window.addEventListener('popstate', scheduleRecognition);
   window.addEventListener('pageshow', scheduleRecognition);

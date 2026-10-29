@@ -24,6 +24,7 @@
       userNavigated: false,
       compact: false,
       rememberLastView: true,
+      launcherPosition: null,
       logs: [],
       summary: { status: '待命', detail: '选择一个工作模式开始使用。' },
       pages: new Map(),
@@ -36,23 +37,23 @@
     frame.innerHTML = `
       <style>
         :host{all:initial}*{box-sizing:border-box}button{font:inherit}
-        .workbench{position:fixed;z-index:2147483001;right:12px;top:12px;bottom:12px;display:flex;align-items:stretch;gap:8px;width:min(500px,calc(100vw - 24px));pointer-events:none;color:#20312f;font:13px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif}
-        .main{display:flex;min-width:0;flex:1;flex-direction:column;overflow:hidden;border:1px solid #dce6e3;border-radius:16px;background:#fff;box-shadow:0 12px 40px #0b282530;pointer-events:auto;transition:width .16s ease,opacity .16s ease}
+        .workbench{position:fixed;z-index:2147483001;right:12px;top:12px;display:flex;align-items:flex-start;gap:8px;width:min(500px,calc(100vw - 24px));max-height:calc(100vh - 24px);pointer-events:none;color:#20312f;font:13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif}
+        .main{display:flex;min-width:0;max-height:calc(100vh - 24px);flex:1;flex-direction:column;overflow:hidden;border:1px solid #dce6e3;border-radius:16px;background:#fff;box-shadow:0 12px 40px #0b282530;pointer-events:auto;transition:width .16s ease,opacity .16s ease}
         .workbench.closed .main,.workbench.minimized .main{display:none}
         .brand{display:flex;align-items:center;gap:10px;min-height:62px;padding:10px 12px;border-bottom:1px solid #e9efed;background:#fff}
-        .brand img{width:34px;height:34px;object-fit:contain;border-radius:9px}.brand-copy{min-width:0;flex:1}.brand-name{font-size:15px;font-weight:750;letter-spacing:-.2px}.brand-tagline{font-size:11px;color:#81908b}
+        .brand img{width:34px;height:34px;object-fit:contain;border-radius:9px}.brand-copy{min-width:0;flex:1}.brand-name{font-size:15px;font-weight:750;letter-spacing:-.2px}.brand-tagline{font-size:12px;color:#687873}
         .head-actions{display:flex;gap:6px}.head-actions button,.launcher{width:32px;height:32px;border:1px solid #dce5e2;border-radius:8px;background:#fff;color:#53635e;cursor:pointer;font-size:17px}.head-actions button:hover,.launcher:hover{background:#f1f7f5}
-        .page-content{min-height:0;flex:1;overflow:auto;overscroll-behavior:contain}.wb-page{display:none;min-height:100%;padding:14px}.wb-page.active{display:block}.wb-page[data-slot]{height:100%;padding:0;overflow:hidden}.wb-title{margin:0 0 4px;font-size:17px;font-weight:720}.wb-subtitle{margin:0 0 14px;color:#778580;font-size:11px}
-        .rail{display:flex;width:66px;flex:0 0 66px;flex-direction:column;align-items:stretch;gap:3px;padding:8px 5px;border:1px solid #dce6e3;border-radius:15px;background:#fff;box-shadow:0 8px 28px #0b28251c;pointer-events:auto}
+        .page-content{min-height:0;max-height:calc(100vh - 88px);flex:0 1 auto;overflow:auto;overscroll-behavior:contain}.wb-page{display:none;padding:14px}.wb-page.active{display:block}.wb-page[data-slot]{height:auto;min-height:0;padding:0;overflow:visible}.wb-title{margin:0 0 4px;font-size:17px;font-weight:750}.wb-subtitle{margin:0 0 14px;color:#53625d;font-size:12px}.temu-guide{padding:14px 14px 0}
+        .rail{display:flex;width:76px;flex:0 0 76px;flex-direction:column;align-items:stretch;gap:3px;padding:8px 5px;border:1px solid #dce6e3;border-radius:15px;background:#fff;box-shadow:0 8px 28px #0b28251c;pointer-events:auto}
         .workbench.closed .rail{display:none}.rail-brand{display:grid;place-items:center;height:45px;margin-bottom:4px}.rail-brand img{width:35px;height:35px;object-fit:contain;border-radius:10px}
-        .nav{display:grid;gap:4px}.nav button{display:grid;justify-items:center;align-content:center;gap:3px;min-height:54px;padding:4px 1px;border:0;border-radius:9px;background:transparent;color:#61716c;cursor:pointer;font-size:10px}.nav svg{width:21px;height:21px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}.nav button:hover{background:#f2f7f6}.nav button[aria-current="page"]{color:#087e78;background:#ddf4f0;font-weight:700}.rail-bottom{margin-top:auto}.launcher{display:none;position:fixed;z-index:2147483002;right:16px;top:20px;width:auto;height:auto;padding:8px 12px;border:0;border-radius:22px;background:#087e78;color:#fff;box-shadow:0 4px 18px #102c2933;font-size:12px;font-weight:700;pointer-events:auto}.workbench.closed~.launcher{display:block}
+        .nav{display:grid;gap:4px}.nav button{display:grid;justify-items:center;align-content:center;gap:3px;min-height:54px;padding:4px 1px;border:0;border-radius:9px;background:transparent;color:#53635e;cursor:pointer;font-size:10.5px;font-weight:600}.nav button span{white-space:nowrap}.nav svg{width:21px;height:21px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}.nav button:hover{background:#f2f7f6}.nav button[aria-current="page"]{color:#087e78;background:#ddf4f0;font-weight:750}.rail-bottom{margin-top:auto}.launcher{display:none;position:fixed;z-index:2147483002;right:16px;top:20px;width:auto;height:auto;padding:9px 13px;border:0;border-radius:22px;background:#087e78;color:#fff;box-shadow:0 4px 18px #102c2933;font-size:12.5px;font-weight:750;pointer-events:auto;touch-action:none;user-select:none;cursor:grab}.launcher:hover{background:#056c65}.launcher.dragging{cursor:grabbing}.workbench.closed~.launcher{display:block}
         .cards{display:grid;grid-template-columns:1fr 1fr;gap:9px}.tile,.session{padding:12px;border:1px solid #e5edeb;border-radius:11px;background:#fff}.tile strong{display:block;margin-top:5px;font-size:15px}.tile span,.muted{color:#7b8985;font-size:11px}.quick{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.wb-button{min-height:34px;padding:7px 10px;border:1px solid #cdded9;border-radius:8px;background:#fff;color:#14645b;cursor:pointer;font-weight:650}.wb-button:hover{background:#f1f8f6}.wb-button.primary{border-color:#07867d;background:#07867d;color:#fff}.wb-button:disabled{opacity:.5;cursor:not-allowed}.session-list,.log-list{display:grid;gap:8px}.session-head{display:flex;align-items:center;justify-content:space-between;gap:8px}.session strong{font-size:12px}.session p{margin:5px 0;color:#778580;font-size:11px}.log-list{max-height:calc(100vh - 180px);overflow:auto}.log-entry{padding:8px 9px;border:1px solid #e8eeec;border-radius:8px;color:#586864;font:11px/1.45 ui-monospace,Consolas,monospace;overflow-wrap:anywhere}.log-entry time{display:block;color:#97a29f;font:10px sans-serif;margin-bottom:3px}.setting{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:12px 0;border-bottom:1px solid #edf1f0}.setting strong{display:block}.setting input{width:17px;height:17px;accent-color:#07867d}.notice{padding:11px;border-radius:9px;background:#f1f6f5;color:#5c6c67}.error{background:#fff5e9;color:#885c21}.compact .wb-page{padding:10px}.compact .nav button{min-height:48px}.inactive{display:grid;gap:8px;padding:14px;border:1px dashed #cbd8d4;border-radius:10px;color:#5e6c68}.inactive a{color:#087e78;font-weight:650}
-        @media(max-width:520px){.workbench{right:6px;top:6px;bottom:6px;width:calc(100vw - 12px);gap:5px}.rail{width:60px;flex-basis:60px}.rail button{font-size:9px}}
+        @media(max-width:520px){.workbench{right:6px;top:6px;width:calc(100vw - 12px);gap:5px}.rail{width:72px;flex-basis:72px}.rail button{font-size:10px}}
       </style>
       <section class="workbench" aria-label="StoreSnapper 工作台">
         <main class="main"><header class="brand"><img alt=""/><div class="brand-copy"><div class="brand-name">StoreSnapper</div><div class="brand-tagline">让跨境选品与采集更简单</div></div><div class="head-actions"><button type="button" data-action="minimize" aria-label="收起工作台" title="收起">−</button><button type="button" data-action="close" aria-label="关闭工作台" title="关闭">×</button></div></header><div class="page-content"></div></main>
         <aside class="rail" aria-label="工作台导航"><div class="rail-brand"><img alt="StoreSnapper"/></div><nav class="nav"></nav></aside>
-      </section><button class="launcher" type="button">StoreSnapper</button>`;
+      </section><button class="launcher" type="button" title="拖动调整 StoreSnapper 入口位置">StoreSnapper</button>`;
     shadow.append(frame);
     const shell = frame.querySelector('.workbench');
     const pageContent = frame.querySelector('.page-content');
@@ -85,7 +86,54 @@
     settings.innerHTML = '<h1 class="wb-title">设置</h1><p class="wb-subtitle">设置保存在本机 Chrome 扩展存储中</p><label class="setting"><span><strong>记住上次打开的页面</strong><span class="muted">重新打开工作台时恢复导航页面</span></span><input type="checkbox" data-pref="rememberLastView"/></label><label class="setting"><span><strong>紧凑显示</strong><span class="muted">减少导航与内容留白</span></span><input type="checkbox" data-pref="compactMode"/></label><p class="notice settings-note">仅影响本机工作台显示，不会改变采集或搜图行为。</p>';
     frame.querySelector('[data-action="minimize"]').addEventListener('click', () => { shell.classList.toggle('minimized'); });
     frame.querySelector('[data-action="close"]').addEventListener('click', () => { state.onClose(); shell.classList.add('closed'); });
-    frame.querySelector('.launcher').addEventListener('click', () => { shell.classList.remove('closed', 'minimized'); });
+    const launcher = frame.querySelector('.launcher');
+    let dragStart;
+    let suppressLauncherClick = false;
+    const clampLauncher = (left, top) => ({
+      left: Math.max(8, Math.min(window.innerWidth - launcher.offsetWidth - 8, left)),
+      top: Math.max(8, Math.min(window.innerHeight - launcher.offsetHeight - 8, top)),
+    });
+    const applyLauncherPosition = (position) => {
+      const clamped = clampLauncher(position.left, position.top);
+      state.launcherPosition = clamped;
+      launcher.style.left = `${clamped.left}px`;
+      launcher.style.right = 'auto';
+      launcher.style.top = `${clamped.top}px`;
+    };
+    launcher.addEventListener('pointerdown', (event) => {
+      if (event.button !== 0) return;
+      const rect = launcher.getBoundingClientRect();
+      dragStart = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, left: rect.left, top: rect.top, moved: false };
+      launcher.setPointerCapture(event.pointerId);
+      event.preventDefault();
+    });
+    launcher.addEventListener('pointermove', (event) => {
+      if (!dragStart || event.pointerId !== dragStart.pointerId) return;
+      const dx = event.clientX - dragStart.x;
+      const dy = event.clientY - dragStart.y;
+      if (!dragStart.moved && Math.hypot(dx, dy) < 4) return;
+      dragStart.moved = true;
+      suppressLauncherClick = true;
+      launcher.classList.add('dragging');
+      applyLauncherPosition({ left: dragStart.left + dx, top: dragStart.top + dy });
+    });
+    const finishDrag = (event) => {
+      if (!dragStart || (event?.pointerId !== undefined && event.pointerId !== dragStart.pointerId)) return;
+      const moved = dragStart.moved;
+      dragStart = undefined;
+      launcher.classList.remove('dragging');
+      if (moved) {
+        persistPrefs();
+        window.setTimeout(() => { suppressLauncherClick = false; }, 0);
+      }
+    };
+    launcher.addEventListener('pointerup', finishDrag);
+    launcher.addEventListener('pointercancel', finishDrag);
+    launcher.addEventListener('click', (event) => {
+      if (suppressLauncherClick) { event.preventDefault(); event.stopPropagation(); suppressLauncherClick = false; return; }
+      shell.classList.remove('closed', 'minimized');
+    });
+    window.addEventListener('resize', () => { if (state.launcherPosition) applyLauncherPosition(state.launcherPosition); });
     settings.querySelectorAll('input').forEach((input) => input.addEventListener('change', () => {
       state[input.dataset.pref] = input.checked;
       shell.classList.toggle('compact', state.compactMode);
@@ -100,7 +148,7 @@
 
     function persistPrefs() {
       if (!chrome?.storage?.local || !state.prefsLoaded) return;
-      const prefs = { rememberLastView: state.rememberLastView, compactMode: Boolean(state.compactMode), lastPage: state.activePage };
+      const prefs = { rememberLastView: state.rememberLastView, compactMode: Boolean(state.compactMode), lastPage: state.activePage, launcherPosition: state.launcherPosition };
       void chrome.storage.local.set({ [PREF_KEY]: prefs });
     }
     function collectLogs() {
@@ -205,6 +253,7 @@
       const prefs = data[PREF_KEY] || {};
       state.rememberLastView = prefs.rememberLastView !== false;
       state.compactMode = Boolean(prefs.compactMode);
+      if (prefs.launcherPosition && Number.isFinite(prefs.launcherPosition.left) && Number.isFinite(prefs.launcherPosition.top)) applyLauncherPosition(prefs.launcherPosition);
       state.prefsLoaded = true;
       frame.querySelector('[data-pref="rememberLastView"]').checked = state.rememberLastView;
       frame.querySelector('[data-pref="compactMode"]').checked = state.compactMode;

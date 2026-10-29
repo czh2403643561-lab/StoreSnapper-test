@@ -42,14 +42,14 @@
     issue: undefined,
   };
 
+  function isTemuHost(hostname = location.hostname) {
+    return hostname === 'www.temu.com';
+  }
+
   function isSupportedListing() {
-    if (location.hostname !== 'www.temu.com') return false;
-    const path = location.pathname.toLowerCase();
-    const params = new URLSearchParams(location.search);
-    const category = /-o\d+-\d+\.html$/.test(path) || params.get('_x_enter_scene_type') === 'cate_tab';
-    const search = /\/search_result(?:\.html)?\/?$/.test(path)
-      && ['search_key', 'searchKey', 'q', 'query'].some((key) => Boolean(params.get(key)));
-    return category || search;
+    // Website recognition is intentionally independent of URL layout. Product cards
+    // are checked separately so home, channel, category and search feeds can vary.
+    return isTemuHost() && !isProductLink(location.href);
   }
 
   function ensureUi() {
@@ -71,20 +71,20 @@
         }
         .icon:hover, .icon:focus-visible { transform: scale(1.08); outline: 2px solid #1e7658; outline-offset: 1px; }
         .icon svg { width: 16px; height: 16px; }
-        .panel { position:relative;display:flex;flex-direction:column;width:100%;max-width:none;height:100%;color:#202822;background:#fff;pointer-events:auto;font:13px/1.45 Arial,"Microsoft YaHei",sans-serif; }
+        .panel { position:relative;display:flex;flex-direction:column;width:100%;max-width:none;max-height:calc(100vh - 88px);color:#202822;background:#fff;pointer-events:auto;font:13px/1.5 Arial,"Microsoft YaHei",sans-serif; }
         .header {
           display: flex; align-items: center; gap: 8px; padding: 12px 12px 10px;
           border-bottom: 1px solid #e9eeeb; background: #fff;
         }
         .heading { min-width: 0; flex: 1; }
-        .heading strong { display: block; font-size: 15px; line-height: 20px; }
-        .product-title { overflow: hidden; margin-top: 2px; color: #69746e; text-overflow: ellipsis; white-space: nowrap; }
+        .heading strong { display: block; font-size: 15px; line-height: 20px; font-weight: 700; }
+        .product-title { overflow: hidden; margin-top: 2px; color: #52615b; font-size:12px; font-weight:550; text-overflow: ellipsis; white-space: nowrap; }
         .header-button {
           display: grid; place-items: center; width: 29px; height: 29px; flex: 0 0 auto;
           border: 1px solid #e0e7e2; border-radius: 7px; color: #405148; background: #fff; cursor: pointer;
         }
         .header-button:hover { background: #f1f6f2; }
-        .scroll-area { min-height: 0; flex: 1; overflow-y: auto; overscroll-behavior: contain; padding: 10px 10px 18px; }
+        .scroll-area { min-height: 0; flex: 1 1 auto; overflow-y: auto; overscroll-behavior: contain; padding: 10px 10px 14px; }
         .message {
           margin: 0 0 9px; padding: 10px; border: 1px solid #e7ece8; border-radius: 9px;
           color: #425048; background: #f8faf8;
@@ -99,7 +99,7 @@
         }
         .action.primary { color: #fff; border-color: #26734f; background: #26734f; }
         .action:hover { filter: brightness(.97); }
-        .count { margin: 5px 1px 8px; color: #6c7770; font-size: 11px; }
+        .count { margin: 5px 1px 8px; color: #53615b; font-size: 12px; font-weight:600; }
         .diagnostics { margin: 12px 0 0; padding-top: 8px; border-top: 1px solid #eef0ee; color: #77817a; font-size: 10px; }
         .diagnostics summary { cursor: pointer; }
         .diagnostic-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; margin-top: 7px; color: #77522c; font-size: 11px; }
@@ -118,10 +118,10 @@
         .card-image-rendered { display: block; width: 100%; aspect-ratio: 1; object-fit: contain; background: #f3f5f3; }
         .image-placeholder { padding: 8px; color: #8b938e; font-size: 11px; text-align: center; }
         .card-info { padding: 7px 7px 8px; }
-        .card-title { display: -webkit-box; height: 33px; overflow: hidden; margin: 0 0 6px; color: #38423c; font-size: 11px; line-height: 16px; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+        .card-title { display: -webkit-box; height: 36px; overflow: hidden; margin: 0 0 6px; color: #303a35; font-size: 12px; font-weight:550; line-height: 17px; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
         .price { min-height: 19px; margin-bottom: 5px; color: #a83e32; font-size: 14px; font-weight: 700; }
-        .meta { display: flex; flex-direction: column; gap: 2px; color: #657068; font-size: 10px; }
-        .supplier { overflow: hidden; margin-top: 6px; color: #42554a; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+        .meta { display: flex; flex-direction: column; gap: 2px; color: #4f5d56; font-size: 11px; font-weight:500; }
+        .supplier { overflow: hidden; margin-top: 6px; color: #3c5145; font-size: 11px; font-weight:500; text-overflow: ellipsis; white-space: nowrap; }
         .badge { display: inline-block; max-width: 100%; overflow: hidden; margin: 5px 3px 0 0; padding: 2px 5px; border-radius: 4px; color: #486453; background: #eff5f0; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
         .icon[hidden], .panel[hidden], .actions[hidden], .message[hidden], .count[hidden], .diagnostics[hidden] { display: none !important; }
         @media (max-width: 320px) { .cards { grid-template-columns: 1fr; } }
@@ -162,7 +162,12 @@
     diagnosticsCopyButton = shadow.querySelector('.diagnostic-copy');
     workbench = window.StoreSnapperWorkbenchUI?.mount(shadow, { activeMode: 'temu', expanded: false, onClose: () => closePanel(true) });
     const temuPage = workbench?.page('temu');
-    if (temuPage) temuPage.append(panel);
+    if (temuPage) {
+      const guide = document.createElement('section');
+      guide.className = 'temu-guide';
+      guide.innerHTML = '<h1 class="wb-title">已识别 Temu</h1><p class="wb-subtitle">首页、闪购、类目和搜索页均可识别商品卡片。悬停商品主图后点击放大镜开始搜图。</p>';
+      temuPage.append(guide, panel);
+    }
     const tiktokPage = workbench?.page('tiktok');
     if (tiktokPage) tiktokPage.innerHTML = '<h1 class="wb-title">TikTok 商品管理采集</h1><p class="wb-subtitle">仅在 Seller Center 商品管理页提供采集操作。</p><div class="inactive">当前打开的是 Temu 页面。<a href="https://seller.eu.tiktokshopglobalselling.com/product/manage?shop_region=GB" target="_blank" rel="noopener noreferrer">打开 TikTok Seller Center 商品管理页</a></div>';
     workbench?.setSummaryProvider(() => ({ mode: 'Temu 找货', status: state.product ? phaseMessage(state.phase) || '搜索完成' : '待命', detail: state.product?.title || '悬停商品主图后点击放大镜开始搜索' }));
@@ -192,6 +197,7 @@
     const isImage = media instanceof HTMLImageElement;
     const isVideoPoster = media instanceof HTMLVideoElement && Boolean(media.poster || media.getAttribute('poster'));
     if ((!isImage && !isVideoPoster) || !media.isConnected || (isImage && !media.complete)) return undefined;
+    if (isProductLink(location.href)) return undefined;
     const rect = media.getBoundingClientRect();
     if (rect.width < 72 || rect.height < 72 || rect.width > 1100 || rect.height > 1100) return undefined;
     if (isImage && (media.naturalWidth < 120 || media.naturalHeight < 120)) return undefined;
@@ -229,8 +235,14 @@
     const headingText = cleanTitle(productLink?.querySelector('h1, h2, h3, [role="heading"]')?.innerText || '');
     const titleSignal = alt.length >= 10 || headingText.length >= 10 || cardText.length >= 28;
     const interactive = [...links].length > 0 || ancestors.some((node) => node.getAttribute('role') === 'link' || node.getAttribute('role') === 'button' || getComputedStyle(node).cursor === 'pointer');
-    const strongIdentity = Boolean(dataId || productLink);
-    if (!strongIdentity && !(interactive && priceSignal && titleSignal)) return undefined;
+    const cardContainsMedia = Boolean(card?.contains(media));
+    const cardContainsProductLink = Boolean(productLink && card?.contains(productLink));
+    const productCardSignal = cardContainsMedia && titleSignal && (
+      cardContainsProductLink
+      || (dataId && (priceSignal || cardText.length >= 28))
+      || (interactive && priceSignal)
+    );
+    if (!productCardSignal) return undefined;
 
     const title = alt || headingText || cleanTitle(cardText).slice(0, 140) || 'Temu 商品';
     return { image: media, imageUrl: parsedImage.href, title, card };
@@ -276,7 +288,7 @@
   function isProductLink(href) {
     try {
       const url = new URL(href, location.href);
-      if (url.protocol !== 'https:' || url.hostname !== 'www.temu.com') return false;
+      if (url.protocol !== 'https:' || !isTemuHost(url.hostname)) return false;
       const path = url.pathname.toLowerCase();
       if (/-o\d+-\d+\.html$/.test(path) || /search_result/.test(path)) return false;
       const keys = [...url.searchParams.keys()].map((key) => key.toLowerCase());
@@ -386,7 +398,7 @@
     if (!shadow) return;
     workbench?.refreshSummary();
     workbench?.refreshLogs();
-    panel.hidden = false;
+    panel.hidden = !state.open;
     titleNode.textContent = state.product?.title || 'Temu 商品';
     messageNode.hidden = state.phase === 'ready';
     messageNode.textContent = state.message || phaseMessage(state.phase) || '悬停 Temu 商品主图后，点击放大镜搜索相似货源。';
@@ -663,7 +675,14 @@
     render();
   }
 
-  chrome.runtime.onMessage.addListener((message) => {
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message?.type === 'STORESNAPPER_OPEN_WORKBENCH' && message.mode === 'temu' && supported) {
+      ensureUi();
+      workbench?.setPage('temu');
+      workbench?.setExpanded(true);
+      sendResponse({ ok: true, mode: 'temu' });
+      return false;
+    }
     if (message?.type !== 'SEARCH_UPDATE' || message.requestId !== currentRequestId) return;
     state.phase = message.state || 'failed';
     state.results = Array.isArray(message.results) ? message.results : [];
@@ -678,7 +697,11 @@
   document.addEventListener('pointerout', onPointerOut, true);
   document.addEventListener('securitypolicyviolation', onImagePolicyViolation, true);
   document.addEventListener('load', (event) => {
-    if (event.target === activeImage && activeHoverTarget) setActiveImage(activeHoverTarget, lastPointerX, lastPointerY);
+    if (!(event.target instanceof HTMLImageElement)) return;
+    const rect = event.target.getBoundingClientRect();
+    if (lastPointerX >= rect.left && lastPointerX <= rect.right && lastPointerY >= rect.top && lastPointerY <= rect.bottom) {
+      setActiveImage(event.target, lastPointerX, lastPointerY);
+    }
   }, true);
   window.addEventListener('scroll', positionIcon, { capture: true, passive: true });
   window.addEventListener('resize', positionIcon, { passive: true });

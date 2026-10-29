@@ -1,0 +1,20 @@
+*{box-sizing:border-box}
+body{width:320px;margin:0;background:#f7faf9;color:#20312f;font:13px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif}
+.popup{padding:14px}
+.brand{display:flex;align-items:center;gap:10px;padding:2px 2px 13px;border-bottom:1px solid #e4ebe8}
+.brand img{width:38px;height:38px;border-radius:10px;object-fit:contain}
+.brand strong,.brand span{display:block}
+.brand strong{font-size:15px;font-weight:750;letter-spacing:-.2px}
+.brand span{margin-top:1px;color:#71807b;font-size:12px}
+.context{display:flex;gap:10px;align-items:flex-start;margin:13px 0;padding:11px;border:1px solid #e1ebe7;border-radius:11px;background:#fff}
+.status-dot{width:9px;height:9px;flex:0 0 auto;margin-top:5px;border-radius:50%;background:#a7b2ae}
+.context[data-kind="ready"] .status-dot{background:#0d9a77;box-shadow:0 0 0 3px #e4f7ef}
+.context[data-kind="unsupported"] .status-dot{background:#cf9a43}
+.context-title{font-size:13px;font-weight:700}
+.context-detail{margin:3px 0 0;color:#687873;font-size:12px}
+.actions{display:grid;gap:8px}
+.action{display:flex;width:100%;align-items:center;justify-content:space-between;gap:12px;padding:11px 12px;border:1px solid #d8e5e0;border-radius:10px;background:#fff;color:#175b53;text-align:left;cursor:pointer;font:inherit;font-weight:650}
+.action:hover{border-color:#8bbdb1;background:#f2faf7}
+.action:disabled{color:#8a9692;cursor:default;background:#f3f6f5}
+.action small{color:#74827e;font-size:11px;font-weight:500}
+footer{margin:12px 2px 0;color:#77847f;font-size:11px}
