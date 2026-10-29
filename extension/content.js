@@ -1,6 +1,7 @@
 (() => {
   const IMAGE_HOSTS = new Set(['img.kwcdn.com', 'img-eu.kwcdn.com', 'aimg.kwcdn.com']);
-  const MAX_IMAGE_DIAGNOSTICS = 12;
+  const OFFER_IMAGE_DIAGNOSTIC_HOSTS = new Set(['cbu01.alicdn.com']);
+  const MAX_IMAGE_DIAGNOSTICS = 60;
   const PRICE_PATTERN = /(?:£|\$|€|¥|￥)\s*\d[\d,.]*/;
   let routeUrl = location.href;
   let root;
@@ -26,6 +27,9 @@
   let currentRequestId;
   let imageDiagnostics = [];
   let imageDiagnosticsByUrl = new Map();
+  let imageFallbacksByUrl = new Map();
+  let imageDiagnosticRuntime = new WeakMap();
+  const pageImagePolicyViolations = new Map();
   let imageProbeCount = 0;
   let supported = false;
   const state = {
@@ -122,6 +126,7 @@
         .card:hover { border-color: #83aa92; box-shadow: 0 2px 8px rgba(25, 77, 51, .1); }
         .card-image, .image-placeholder { display: grid; place-items: center; width: 100%; aspect-ratio: 1; background: #f3f5f3; }
         .card-image { object-fit: contain; }
+        .card-image-rendered { display: block; width: 100%; aspect-ratio: 1; object-fit: contain; background: #f3f5f3; }
         .image-placeholder { padding: 8px; color: #8b938e; font-size: 11px; text-align: center; }
         .card-info { padding: 7px 7px 8px; }
         .card-title { display: -webkit-box; height: 33px; overflow: hidden; margin: 0 0 6px; color: #38423c; font-size: 11px; line-height: 16px; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
@@ -366,6 +371,9 @@
     currentRequestId = crypto.randomUUID();
     imageDiagnostics = [];
     imageDiagnosticsByUrl = new Map();
+    imageFallbacksByUrl = new Map();
+    imageDiagnosticRuntime = new WeakMap();
+    pageImagePolicyViolations.clear();
     imageProbeCount = 0;
     const requestId = currentRequestId;
     hideIcon();
@@ -451,11 +459,7 @@
       image.referrerPolicy = 'no-referrer';
       image.alt = item.title || '1688 商品图片';
       image.addEventListener('error', () => {
-        recordImageFailure(item, imageUrl);
-        const placeholder = document.createElement('div');
-        placeholder.className = 'image-placeholder';
-        placeholder.textContent = '图片加载失败 · 可查看诊断';
-        image.replaceWith(placeholder);
+        recordImageFailure(item, imageUrl, image);
       }, { once: true });
       card.append(image);
       image.src = imageUrl;
@@ -509,29 +513,42 @@
     return card;
   }
 
-  function recordImageFailure(item, imageUrl) {
+  function recordImageFailure(item, imageUrl, image) {
     let parsedUrl;
     try { parsedUrl = new URL(imageUrl); } catch { return; }
     let record = imageDiagnosticsByUrl.get(imageUrl);
-    if (record) {
-      record.occurrences += 1;
+    if (!record) {
+      record = {
+        offerId: String(item.offer_id || ''),
+        title: cleanTitle(item.title || '').slice(0, 100),
+        image: { host: parsedUrl.hostname, path: parsedUrl.pathname },
+        pageImageLoad: 'error',
+        occurrences: 0,
+        pagePolicy: pageImagePolicyViolations.get(parsedUrl.hostname),
+        fallback: 'checking',
+        probe: { state: 'checking', message: '正在读取图片并核对页面拦截情况…' },
+      };
+      imageDiagnosticsByUrl.set(imageUrl, record);
+      imageDiagnostics.push(record);
+      imageDiagnosticRuntime.set(record, { started: false, pendingImages: new Set() });
+    }
+    record.occurrences += 1;
+    const runtime = imageDiagnosticRuntime.get(record);
+    runtime.pendingImages.add(image);
+    const cachedFallback = imageFallbacksByUrl.get(imageUrl);
+    if (cachedFallback) {
+      void paintFallbackImage(image, cachedFallback, record);
       renderImageDiagnostics();
       return;
     }
-    record = {
-      offerId: String(item.offer_id || ''),
-      title: cleanTitle(item.title || '').slice(0, 100),
-      image: { host: parsedUrl.hostname, path: parsedUrl.pathname },
-      pageImageLoad: 'error',
-      occurrences: 1,
-      probe: { state: 'checking', message: '正在核对图片服务返回的数据…' },
-    };
-    imageDiagnosticsByUrl.set(imageUrl, record);
-    imageDiagnostics.push(record);
     renderImageDiagnostics();
 
+    if (runtime.started) return;
+    runtime.started = true;
     if (imageProbeCount >= MAX_IMAGE_DIAGNOSTICS) {
-      record.probe = { state: 'skipped', message: `已达到单次搜索 ${MAX_IMAGE_DIAGNOSTICS} 张图片的诊断上限；浏览器图片错误仍已记录。` };
+      record.fallback = 'skipped';
+      record.probe = { state: 'skipped', message: `已达到单次搜索 ${MAX_IMAGE_DIAGNOSTICS} 张图片的诊断上限；此图未触发扩展侧补画。` };
+      replaceWithImagePlaceholder(image, '图片暂不可用 · 查看诊断');
       renderImageDiagnostics();
       return;
     }
@@ -540,14 +557,67 @@
     void chrome.runtime.sendMessage({ type: 'DIAGNOSE_1688_IMAGE', imageUrl })
       .then((response) => {
         if (requestId !== currentRequestId || imageDiagnosticsByUrl.get(imageUrl) !== record) return;
-        record.probe = response?.result || { state: 'error', message: response?.error || '诊断请求没有返回结果。' };
+        const result = response?.result;
+        const { imageDataBase64, imageMimeType, ...probe } = result || {};
+        record.probe = probe || { state: 'error', message: response?.error || '诊断请求没有返回结果。' };
+        if (!response?.ok || !imageDataBase64) {
+          record.fallback = 'unavailable';
+          for (const pendingImage of runtime.pendingImages) replaceWithImagePlaceholder(pendingImage, '图片暂不可用 · 查看诊断');
+          renderImageDiagnostics();
+          return;
+        }
+        const fallback = { base64: imageDataBase64, mimeType: imageMimeType || 'image/webp' };
+        imageFallbacksByUrl.set(imageUrl, fallback);
+        record.fallback = 'drawing';
+        for (const pendingImage of runtime.pendingImages) void paintFallbackImage(pendingImage, fallback, record);
         renderImageDiagnostics();
       })
       .catch((error) => {
         if (requestId !== currentRequestId || imageDiagnosticsByUrl.get(imageUrl) !== record) return;
+        record.fallback = 'unavailable';
         record.probe = { state: 'error', message: error?.name === 'TypeError' ? '无法连接扩展后台，请重新加载插件后再试。' : '扩展后台无法完成图片诊断。' };
+        for (const pendingImage of runtime.pendingImages) replaceWithImagePlaceholder(pendingImage, '图片暂不可用 · 查看诊断');
         renderImageDiagnostics();
       });
+  }
+
+  async function paintFallbackImage(image, fallback, record) {
+    if (!image.isConnected || image.dataset.fallbackStarted === 'true') return;
+    image.dataset.fallbackStarted = 'true';
+    let bitmap;
+    try {
+      const binary = atob(fallback.base64);
+      const bytes = new Uint8Array(binary.length);
+      for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+      bitmap = await createImageBitmap(new Blob([bytes], { type: fallback.mimeType }));
+      if (!image.isConnected || !currentRequestId) return;
+      const canvas = document.createElement('canvas');
+      canvas.className = 'card-image-rendered';
+      canvas.width = bitmap.width;
+      canvas.height = bitmap.height;
+      canvas.setAttribute('role', 'img');
+      canvas.setAttribute('aria-label', image.alt || '1688 商品图片');
+      canvas.title = image.alt || '1688 商品图片';
+      const context = canvas.getContext('2d', { alpha: false });
+      if (!context) throw new Error('CanvasUnavailable');
+      context.drawImage(bitmap, 0, 0);
+      image.replaceWith(canvas);
+      record.fallback = 'canvas_rendered';
+    } catch (error) {
+      record.fallback = error?.name === 'SecurityError' ? 'canvas_blocked' : 'decode_failed';
+      replaceWithImagePlaceholder(image, '图片暂不可用 · 查看诊断');
+    } finally {
+      bitmap?.close();
+    }
+    renderImageDiagnostics();
+  }
+
+  function replaceWithImagePlaceholder(image, label) {
+    if (!image.isConnected) return;
+    const placeholder = document.createElement('div');
+    placeholder.className = 'image-placeholder';
+    placeholder.textContent = label;
+    image.replaceWith(placeholder);
   }
 
   function renderImageDiagnostics() {
@@ -555,6 +625,19 @@
     diagnosticsNode.hidden = imageDiagnostics.length === 0;
     diagnosticsCountNode.textContent = `货源图加载失败 ${imageDiagnostics.length} 张`;
     diagnosticsPreNode.textContent = JSON.stringify(imageDiagnostics, null, 2);
+  }
+
+  function onImagePolicyViolation(event) {
+    if (!String(event.effectiveDirective || '').toLowerCase().startsWith('img-src')) return;
+    let blockedHost = '';
+    try { blockedHost = new URL(event.blockedURI, location.href).hostname; } catch { return; }
+    if (!OFFER_IMAGE_DIAGNOSTIC_HOSTS.has(blockedHost)) return;
+    const policy = { directive: event.effectiveDirective, disposition: event.disposition || 'enforce' };
+    pageImagePolicyViolations.set(blockedHost, policy);
+    for (const record of imageDiagnostics) {
+      if (record.image.host === blockedHost) record.pagePolicy = policy;
+    }
+    renderImageDiagnostics();
   }
 
   function safeHttpsUrl(value) {
@@ -598,6 +681,7 @@
 
   document.addEventListener('pointerover', onPointerOver, true);
   document.addEventListener('pointerout', onPointerOut, true);
+  document.addEventListener('securitypolicyviolation', onImagePolicyViolation, true);
   document.addEventListener('load', (event) => {
     if (event.target === activeImage && activeHoverTarget) setActiveImage(activeHoverTarget, lastPointerX, lastPointerY);
   }, true);

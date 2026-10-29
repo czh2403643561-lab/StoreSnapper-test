@@ -15,6 +15,7 @@ import {
 const jobsByTab = new Map();
 const IMAGE_HOSTS = new Set(['img.kwcdn.com', 'img-eu.kwcdn.com', 'aimg.kwcdn.com']);
 const DIAGNOSTIC_IMAGE_HOSTS = new Set(['cbu01.alicdn.com']);
+const MAX_DIAGNOSTIC_IMAGE_BYTES = 256 * 1024;
 const LOGIN_URL = 'https://login.1688.com/member/signin.htm?Done=https%3A%2F%2Fwww.1688.com%2F';
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -79,46 +80,127 @@ async function diagnose1688Image(imageUrl) {
   try {
     const response = await fetch(url.href, {
       method: 'GET',
-      headers: { Range: 'bytes=0-255' },
       credentials: 'omit',
       referrerPolicy: 'no-referrer',
       cache: 'no-store',
-      redirect: 'follow',
+      redirect: 'manual',
       signal: controller.signal,
     });
-    let prefix = new Uint8Array();
-    if (response.body) {
-      const reader = response.body.getReader();
-      try {
-        const chunk = await reader.read();
-        prefix = (chunk.value || new Uint8Array()).slice(0, 512);
-      } finally {
-        await reader.cancel().catch(() => undefined);
-      }
-    }
     const contentType = response.headers.get('content-type') || '';
-    const signature = sniffImageFormat(prefix);
-    const diagnosis = classifyImageProbe({ status: response.status, contentType, signature });
+    const normalizedContentType = contentType.split(';', 1)[0].trim().toLowerCase();
+    const contentLength = response.headers.get('content-length') || 'unknown';
     const finalUrl = response.url ? new URL(response.url) : url;
-    const bodyText = contentType.toLowerCase().includes('text/') || contentType.toLowerCase().includes('html')
-      ? new TextDecoder().decode(prefix).toLowerCase()
-      : '';
-    const bodyMarker = /captcha|verify|security|challenge|安全验证|访问受限/.test(bodyText)
-      ? 'security_challenge_or_verification_page'
-      : /access denied|forbidden|hotlink|referer/.test(bodyText) ? 'access_or_hotlink_error_page' : '';
-    return {
-      ...diagnosis,
+    const base = {
       checkedAt: new Date().toISOString(),
       request,
       status: response.status,
-      contentType: contentType.split(';', 1)[0].trim() || 'unknown',
-      contentLength: response.headers.get('content-length') || 'unknown',
+      contentType: normalizedContentType || 'unknown',
+      contentLength,
       contentRange: response.headers.get('content-range') || 'unknown',
-      capturedBytes: prefix.length,
-      signature,
-      redirected: response.redirected,
+      redirected: response.redirected || (response.status >= 300 && response.status < 400),
       finalUrl: { host: finalUrl.hostname, path: finalUrl.pathname },
-      bodyMarker: bodyMarker || undefined,
+    };
+    const reader = response.body?.getReader();
+    const chunks = [];
+    const prefixChunks = [];
+    let totalBytes = 0;
+    let prefixLength = 0;
+    let completed = false;
+    const addPrefix = (chunk) => {
+      if (prefixLength >= 512) return;
+      const slice = chunk.subarray(0, 512 - prefixLength);
+      prefixChunks.push(slice);
+      prefixLength += slice.length;
+    };
+    const collectPrefix = () => {
+      const prefix = new Uint8Array(prefixLength);
+      let offset = 0;
+      for (const chunk of prefixChunks) { prefix.set(chunk, offset); offset += chunk.length; }
+      return prefix;
+    };
+    const bodyMarkerFor = (prefix) => {
+      if (!normalizedContentType.includes('text/') && !normalizedContentType.includes('html')) return undefined;
+      const bodyText = new TextDecoder().decode(prefix).toLowerCase();
+      if (/captcha|verify|security|challenge|安全验证|访问受限/.test(bodyText)) return 'security_challenge_or_verification_page';
+      if (/access denied|forbidden|hotlink|referer/.test(bodyText)) return 'access_or_hotlink_error_page';
+      return undefined;
+    };
+    const resultFor = (extra = {}) => {
+      const prefix = collectPrefix();
+      const signature = sniffImageFormat(prefix);
+      const diagnosis = classifyImageProbe({ status: response.status, contentType, signature });
+      return {
+        ...diagnosis,
+        ...base,
+        capturedBytes: prefix.length,
+        receivedBytes: totalBytes,
+        signature,
+        bodyMarker: bodyMarkerFor(prefix),
+        ...extra,
+      };
+    };
+
+    try {
+      if (!response.ok || !normalizedContentType.startsWith('image/')) {
+        if (reader) {
+          const chunk = await reader.read();
+          if (chunk.value) {
+            totalBytes = chunk.value.length;
+            addPrefix(chunk.value);
+          }
+        }
+        return resultFor();
+      }
+      const declaredLength = Number(contentLength);
+      if (Number.isFinite(declaredLength) && declaredLength > MAX_DIAGNOSTIC_IMAGE_BYTES) {
+        return {
+          ...resultFor(),
+          state: 'image_too_large',
+          message: `图片超过 ${MAX_DIAGNOSTIC_IMAGE_BYTES / 1024} KB，未读取或绘制以控制内存占用。`,
+        };
+      }
+      if (!reader) return { ...resultFor(), state: 'empty_image', message: '图片响应没有可读取的内容。' };
+      while (true) {
+        const chunk = await reader.read();
+        if (chunk.done) { completed = true; break; }
+        if (!chunk.value) continue;
+        if (totalBytes + chunk.value.length > MAX_DIAGNOSTIC_IMAGE_BYTES) {
+          addPrefix(chunk.value);
+          totalBytes += chunk.value.length;
+          return {
+            ...resultFor(),
+            state: 'image_too_large',
+            message: `图片超过 ${MAX_DIAGNOSTIC_IMAGE_BYTES / 1024} KB，已停止读取以控制内存占用。`,
+          };
+        }
+        chunks.push(chunk.value);
+        totalBytes += chunk.value.length;
+        addPrefix(chunk.value);
+      }
+    } finally {
+      if (reader) {
+        if (!completed) await reader.cancel().catch(() => undefined);
+        reader.releaseLock();
+      }
+    }
+
+    const prefix = collectPrefix();
+    const signature = sniffImageFormat(prefix);
+    const diagnosis = classifyImageProbe({ status: response.status, contentType, signature });
+    if (totalBytes === 0 || !chunks.length) return { ...resultFor(), state: 'empty_image', message: '图片响应没有可读取的内容。' };
+    const bytes = new Uint8Array(totalBytes);
+    let offset = 0;
+    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
+    const imageMimeType = ({ JPEG: 'image/jpeg', PNG: 'image/png', GIF: 'image/gif', WebP: 'image/webp', AVIF: 'image/avif', HEIF: 'image/heif', BMP: 'image/bmp' })[signature] || normalizedContentType;
+    return {
+      ...diagnosis,
+      ...base,
+      capturedBytes: prefix.length,
+      receivedBytes: totalBytes,
+      signature,
+      bodyMarker: bodyMarkerFor(prefix),
+      imageMimeType,
+      imageDataBase64: bytesToBase64(bytes),
     };
   } catch (error) {
     return {
@@ -133,6 +215,14 @@ async function diagnose1688Image(imageUrl) {
   } finally {
     clearTimeout(timeout);
   }
+}
+
+function bytesToBase64(bytes) {
+  let binary = '';
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+  }
+  return btoa(binary);
 }
 
 chrome.tabs.onRemoved.addListener((tabId) => {

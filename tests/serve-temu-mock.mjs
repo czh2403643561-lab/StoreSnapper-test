@@ -7,7 +7,9 @@ const server = createServer((request, response) => {
     response.writeHead(204).end();
     return;
   }
-  response.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+  const headers = { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' };
+  if (process.env.TEMU_MOCK_CSP) headers['content-security-policy'] = process.env.TEMU_MOCK_CSP;
+  response.writeHead(200, headers);
   response.end(page);
 });
 
