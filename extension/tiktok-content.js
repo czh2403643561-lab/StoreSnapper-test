@@ -18,6 +18,7 @@
   const state = {
     host: null,
     shadow: null,
+    workbench: null,
     panelExpanded: false,
     panelMinimized: false,
     mode: '识别中',
@@ -615,14 +616,28 @@
     if (state.host?.isConnected) return;
     state.host = document.createElement('div');
     state.host.id = 'storesnapper-tiktok-collector';
-    state.host.style.cssText = 'all:initial;position:fixed;z-index:2147483000;right:20px;top:180px;';
+    state.host.style.cssText = 'all:initial;position:fixed;z-index:2147483000;inset:0;pointer-events:none;';
     state.shadow = state.host.attachShadow({ mode: 'closed' });
     document.documentElement.append(state.host);
+    state.workbench = window.StoreSnapperWorkbenchUI?.mount(state.shadow, { activeMode: 'tiktok' });
+    const collectorPage = state.workbench?.page('tiktok');
+    if (collectorPage) collectorPage.classList.add('collector-page');
+    const temuPage = state.workbench?.page('temu');
+    if (temuPage) temuPage.innerHTML = '<h1 class="wb-title">Temu 找货</h1><p class="wb-subtitle">仅在 Temu 分类页和搜索结果页提供图片搜货。</p><div class="inactive">当前打开的是 TikTok Seller Center。<a href="https://www.temu.com/" target="_blank" rel="noopener noreferrer">打开 Temu 商品列表</a></div>';
+    state.workbench?.setLogsProvider(() => state.logs);
+    state.workbench?.setSummaryProvider(() => {
+      const count = Object.keys(state.session?.products || {}).length;
+      const page = pageSnapshot()?.paginationState;
+      const labels = { idle: '尚未开始', collecting: '采集中', checking: '检查中', paused: '已暂停', interrupted: '上次中断', needs_review: '待检查', page_complete: '本页完成', all_complete: '全部完成', paging: '正在翻页', error: '失败' };
+      return { mode: 'TikTok 商品管理采集', status: labels[state.status] || state.status || '待命', detail: `${count} 个已采集商品${page?.currentPage ? ` · 当前第 ${page.currentPage} 页` : ''}` };
+    });
     render();
   }
 
   function render(progress = {}) {
     if (!state.shadow) return;
+    state.workbench?.refreshSummary();
+    state.workbench?.refreshLogs();
     const expanded = state.panelExpanded;
     const minimized = state.panelMinimized;
     const snapshot = pageSnapshot();
@@ -655,29 +670,31 @@
       && (page?.totalPages ? page.currentPage >= page.totalPages : nativeNextDisabled);
     const canNext = !scopeMismatch && state.status !== 'paging' && activePage?.status === 'complete' && Boolean(nativeNext) && !nativeNextDisabled
       && page?.currentPage && (!page.totalPages || page.currentPage < page.totalPages) && !state.running;
-    state.shadow.innerHTML = '';
+    const target = state.workbench?.page('tiktok');
+    if (!target) return;
+    target.replaceChildren();
     const style = document.createElement('style');
     style.textContent = `
       :host{all:initial;font:13px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#24312e}
       *{box-sizing:border-box}button{font:inherit;cursor:pointer}button:disabled{cursor:not-allowed;opacity:.48}
-      .launcher{border:0;border-radius:20px;background:#087e78;color:#fff;padding:10px 14px;box-shadow:0 4px 18px #172b2a33;font-weight:650}
-      .panel{display:none;width:360px;max-height:min(680px,calc(100vh - 32px));background:#fff;border:1px solid #dce4e2;border-radius:12px;box-shadow:0 12px 36px #0b201d35;overflow:hidden}
+      .collector-launcher{display:inline-block;border:0;border-radius:20px;background:#087e78;color:#fff;padding:10px 14px;box-shadow:0 4px 18px #172b2a33;font-weight:650}
+      .panel{display:none;width:100%;max-height:none;background:#fff;border:0;border-radius:0;box-shadow:none;overflow:hidden}
       .panel.expanded{display:flex;flex-direction:column}.panel.expanded.minimized{max-height:none;overflow:visible}.panel.expanded.minimized .body{display:none}.head{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border-bottom:1px solid #edf0ef;background:#fbfcfc}
       .title{font-size:14px;font-weight:700}.sub{font-size:11px;color:#72807c;margin-top:2px}.head-actions{display:flex;gap:5px}.icon{border:1px solid #dce4e2;background:#fff;border-radius:7px;min-width:30px;height:30px;color:#52615d}
-      .body{padding:12px 14px;overflow:auto}.summary{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px}.metric{border:1px solid #edf0ef;border-radius:8px;padding:8px 9px}.metric span{display:block;font-size:11px;color:#788580}.metric strong{font-size:15px}.status{margin:0 0 10px;padding:8px 10px;border-radius:8px;background:#f2f6f5;color:#41514d}.status[data-kind="needs_review"],.status[data-kind="error"]{background:#fff4e8;color:#865211}.status[data-kind="all_complete"],.status[data-kind="page_complete"]{background:#eaf6f0;color:#216b48}
+      .body{max-height:calc(100vh - 132px);padding:12px 14px;overflow:auto}.summary{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px}.metric{border:1px solid #edf0ef;border-radius:8px;padding:8px 9px}.metric span{display:block;font-size:11px;color:#788580}.metric strong{font-size:15px}.status{margin:0 0 10px;padding:8px 10px;border-radius:8px;background:#f2f6f5;color:#41514d}.status[data-kind="needs_review"],.status[data-kind="error"]{background:#fff4e8;color:#865211}.status[data-kind="all_complete"],.status[data-kind="page_complete"]{background:#eaf6f0;color:#216b48}
       .actions{display:grid;grid-template-columns:1fr 1fr;gap:7px}.action{border:1px solid #d5e1de;background:#fff;color:#28544e;border-radius:8px;padding:8px}.primary{background:#087e78;border-color:#087e78;color:#fff}.wide{grid-column:1/-1}.hint{font-size:11px;color:#7a8581;margin:9px 0 0}
       details{margin-top:11px;border-top:1px solid #edf0ef;padding-top:8px}summary{cursor:pointer;font-weight:600;color:#53625d}.logbar{display:flex;gap:6px;margin:7px 0}.logbar button{border:1px solid #dce4e2;background:#fff;border-radius:6px;padding:4px 8px;font-size:11px}.logs{max-height:150px;overflow:auto;font:10px/1.45 ui-monospace,Consolas,monospace;color:#66736f;white-space:pre-wrap}
-      @media(max-width:420px){.panel{width:min(360px,calc(100vw - 24px))}}
+      @media(max-width:420px){.panel{width:100%}}
     `;
-    state.shadow.append(style);
+    target.append(style);
     const launcher = button('商品采集', () => {
       state.panelExpanded = true;
       void persist();
       render();
-    }, 'open', 'launcher');
+    }, 'open', 'collector-launcher');
     launcher.style.display = expanded ? 'none' : '';
     launcher.setAttribute('aria-label', '打开 TikTok 商品管理采集');
-    state.shadow.append(launcher);
+    target.append(launcher);
     const panel = document.createElement('section');
     panel.className = `panel${expanded ? ' expanded' : ''}${minimized ? ' minimized' : ''}`;
     panel.setAttribute('aria-label', 'TikTok 商品管理采集');
@@ -758,7 +775,7 @@
     logContent.textContent = state.logs.map((item) => `${item.at.slice(11, 19)} [${item.step}] ${item.message}`).join('\n') || '暂无记录';
     body.append(details);
     panel.append(body);
-    state.shadow.append(panel);
+    target.append(panel);
   }
 
   function scheduleRecognition() {

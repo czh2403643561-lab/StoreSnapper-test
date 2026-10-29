@@ -18,6 +18,7 @@
   let diagnosticsCountNode;
   let diagnosticsPreNode;
   let diagnosticsCopyButton;
+  let workbench;
   let activeImage;
   let activeHoverTarget;
   let activeProduct;
@@ -70,17 +71,7 @@
         }
         .icon:hover, .icon:focus-visible { transform: scale(1.08); outline: 2px solid #1e7658; outline-offset: 1px; }
         .icon svg { width: 16px; height: 16px; }
-        .panel, .rail {
-          position: fixed; right: 0; top: 0; height: 100vh; color: #202822; background: #fff;
-          box-shadow: -5px 0 24px rgba(20, 35, 28, .18); pointer-events: auto;
-          font: 13px/1.45 Arial, "Microsoft YaHei", sans-serif;
-        }
-        .panel { display: flex; flex-direction: column; width: min(360px, 94vw); max-width: 360px; }
-        .rail {
-          display: flex; align-items: center; justify-content: center; width: 42px; cursor: pointer;
-          border: 0; border-left: 1px solid #e7ece8; color: #21543f; background: #f7faf8;
-          font-weight: 700; letter-spacing: .04em; writing-mode: vertical-rl;
-        }
+        .panel { position:relative;display:flex;flex-direction:column;width:100%;max-width:none;height:100%;color:#202822;background:#fff;pointer-events:auto;font:13px/1.45 Arial,"Microsoft YaHei",sans-serif; }
         .header {
           display: flex; align-items: center; gap: 8px; padding: 12px 12px 10px;
           border-bottom: 1px solid #e9eeeb; background: #fff;
@@ -132,8 +123,8 @@
         .meta { display: flex; flex-direction: column; gap: 2px; color: #657068; font-size: 10px; }
         .supplier { overflow: hidden; margin-top: 6px; color: #42554a; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
         .badge { display: inline-block; max-width: 100%; overflow: hidden; margin: 5px 3px 0 0; padding: 2px 5px; border-radius: 4px; color: #486453; background: #eff5f0; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
-        .icon[hidden], .panel[hidden], .rail[hidden], .actions[hidden], .message[hidden], .count[hidden], .diagnostics[hidden] { display: none !important; }
-        @media (max-width: 320px) { .panel { width: 100vw; } .cards { grid-template-columns: 1fr; } }
+        .icon[hidden], .panel[hidden], .actions[hidden], .message[hidden], .count[hidden], .diagnostics[hidden] { display: none !important; }
+        @media (max-width: 320px) { .cards { grid-template-columns: 1fr; } }
       </style>
       <button class="icon" type="button" aria-label="在1688按图搜索" title="在1688按图搜索">
         <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round">
@@ -143,8 +134,6 @@
       <aside class="panel" aria-label="1688 相似货源" hidden>
         <div class="header">
           <div class="heading"><strong>1688 相似货源</strong><div class="product-title"></div></div>
-          <button class="header-button collapse" type="button" aria-label="收起货源栏" title="收起">−</button>
-          <button class="header-button close" type="button" aria-label="关闭货源栏" title="关闭">×</button>
         </div>
         <div class="scroll-area">
           <p class="message" role="status" aria-live="polite"></p>
@@ -158,12 +147,10 @@
           </details>
         </div>
       </aside>
-      <button class="rail" type="button" aria-label="展开1688货源栏" title="展开货源栏" hidden>⌕&nbsp;1688</button>
     `;
     document.documentElement.append(root);
     icon = shadow.querySelector('.icon');
     panel = shadow.querySelector('.panel');
-    rail = shadow.querySelector('.rail');
     titleNode = shadow.querySelector('.product-title');
     messageNode = shadow.querySelector('.message');
     actionsNode = shadow.querySelector('.actions');
@@ -173,6 +160,13 @@
     diagnosticsCountNode = shadow.querySelector('.diagnostic-count');
     diagnosticsPreNode = shadow.querySelector('.diagnostics pre');
     diagnosticsCopyButton = shadow.querySelector('.diagnostic-copy');
+    workbench = window.StoreSnapperWorkbenchUI?.mount(shadow, { activeMode: 'temu', expanded: false, onClose: () => closePanel(true) });
+    const temuPage = workbench?.page('temu');
+    if (temuPage) temuPage.append(panel);
+    const tiktokPage = workbench?.page('tiktok');
+    if (tiktokPage) tiktokPage.innerHTML = '<h1 class="wb-title">TikTok 商品管理采集</h1><p class="wb-subtitle">仅在 Seller Center 商品管理页提供采集操作。</p><div class="inactive">当前打开的是 Temu 页面。<a href="https://seller.eu.tiktokshopglobalselling.com/product/manage?shop_region=GB" target="_blank" rel="noopener noreferrer">打开 TikTok Seller Center 商品管理页</a></div>';
+    workbench?.setSummaryProvider(() => ({ mode: 'Temu 找货', status: state.product ? phaseMessage(state.phase) || '搜索完成' : '待命', detail: state.product?.title || '悬停商品主图后点击放大镜开始搜索' }));
+    workbench?.setLogsProvider(() => imageDiagnostics.slice(-30).map((item) => ({ at: item.at || '', step: '图片诊断', message: `${item.image?.host || '图片'}：${item.probe?.message || item.fallback || item.pageImageLoad || '检查中'}` })));
 
     icon.addEventListener('pointerleave', hideIcon);
     icon.addEventListener('blur', hideIcon);
@@ -181,16 +175,6 @@
       event.stopPropagation();
       event.stopImmediatePropagation();
       if (activeProduct) void startSearch(activeProduct);
-    });
-    shadow.querySelector('.collapse').addEventListener('click', () => {
-      state.collapsed = true;
-      render();
-    });
-    shadow.querySelector('.close').addEventListener('click', () => closePanel(true));
-    rail.addEventListener('click', () => {
-      state.collapsed = false;
-      state.open = true;
-      render();
     });
     diagnosticsCopyButton.addEventListener('click', async () => {
       try {
@@ -364,6 +348,9 @@
     state.results = [];
     state.message = '正在准备商品图片…';
     state.issue = undefined;
+    workbench?.setPage('temu');
+    workbench?.setExpanded(true);
+    workbench?.addLog('搜图', `开始搜索 Temu 商品图片：${product.title || '未命名商品'}`);
     currentRequestId = crypto.randomUUID();
     imageDiagnostics = [];
     imageDiagnosticsByUrl = new Map();
@@ -383,24 +370,26 @@
       if (!response?.ok) {
         state.phase = 'failed';
         state.message = response?.error || '无法启动 1688 搜图，请重试。';
+        workbench?.addLog('搜图', `搜索未启动：${state.message}`);
         render();
       }
     } catch {
       if (requestId !== currentRequestId) return;
       state.phase = 'failed';
       state.message = '插件后台暂不可用。请在扩展管理页重新加载插件后重试。';
+      workbench?.addLog('搜图', state.message);
       render();
     }
   }
 
   function render() {
     if (!shadow) return;
-    panel.hidden = !state.open || state.collapsed;
-    rail.hidden = !state.open || !state.collapsed;
-    if (!state.open || state.collapsed) return;
+    workbench?.refreshSummary();
+    workbench?.refreshLogs();
+    panel.hidden = false;
     titleNode.textContent = state.product?.title || 'Temu 商品';
     messageNode.hidden = state.phase === 'ready';
-    messageNode.textContent = state.message || phaseMessage(state.phase);
+    messageNode.textContent = state.message || phaseMessage(state.phase) || '悬停 Temu 商品主图后，点击放大镜搜索相似货源。';
     messageNode.dataset.state = ['preparing', 'uploading', 'searching', 'enriching'].includes(state.phase)
       ? 'loading' : state.phase === 'needs-auth' ? 'auth' : ['failed', 'empty'].includes(state.phase) ? 'error' : 'ready';
     cardsNode.replaceChildren(...state.results.map(createCard));
@@ -680,6 +669,8 @@
     state.results = Array.isArray(message.results) ? message.results : [];
     state.message = message.message || phaseMessage(state.phase);
     state.issue = message.issue;
+    if (message.state === 'ready') workbench?.addLog('搜图', `1688 返回 ${state.results.length} 个相似货源。`);
+    else if (['failed', 'needs-auth', 'empty'].includes(message.state)) workbench?.addLog('搜图', phaseMessage(message.state) || state.message || '搜索未完成。');
     render();
   });
 
@@ -706,7 +697,15 @@
     routeUrl = location.href;
     supported = isSupportedListing();
     if (supported) ensureUi();
-    else closePanel(true);
+    else {
+      closePanel(true);
+      root?.remove();
+      root = undefined;
+      shadow = undefined;
+      icon = undefined;
+      panel = undefined;
+      workbench = undefined;
+    }
     hideIcon();
   }
 })();

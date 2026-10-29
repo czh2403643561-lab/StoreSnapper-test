@@ -1,8 +1,14 @@
 {
   "manifest_version": 3,
   "name": "StoreSnapper · 电商工作台",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Temu 图片找货与 TikTok Shop 商品管理采集。",
+  "icons": {
+    "16": "assets/storesnapper-16.png",
+    "32": "assets/storesnapper-32.png",
+    "48": "assets/storesnapper-48.png",
+    "128": "assets/storesnapper-128.png"
+  },
   "permissions": ["cookies", "scripting", "tabs", "storage"],
   "host_permissions": [
     "https://www.temu.com/*",
@@ -25,12 +31,12 @@
   "content_scripts": [
     {
       "matches": ["https://www.temu.com/*"],
-      "js": ["content.js"],
+      "js": ["tiktok-core.js", "workbench-ui.js", "content.js"],
       "run_at": "document_idle"
     },
     {
       "matches": ["https://seller.eu.tiktokshopglobalselling.com/*"],
-      "js": ["tiktok-core.js", "tiktok-content.js"],
+      "js": ["tiktok-core.js", "workbench-ui.js", "tiktok-content.js"],
       "run_at": "document_idle"
     }
   ]
