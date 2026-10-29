@@ -25,6 +25,7 @@
       compact: false,
       rememberLastView: true,
       launcherPosition: null,
+      workbenchPosition: null,
       logs: [],
       summary: { status: '待命', detail: '选择一个工作模式开始使用。' },
       pages: new Map(),
@@ -40,24 +41,26 @@
         .workbench{position:fixed;z-index:2147483001;right:12px;top:12px;display:flex;align-items:flex-start;gap:8px;width:min(500px,calc(100vw - 24px));max-height:calc(100vh - 24px);pointer-events:none;color:#20312f;font:13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif}
         .main{display:flex;min-width:0;max-height:calc(100vh - 24px);flex:1;flex-direction:column;overflow:hidden;border:1px solid #dce6e3;border-radius:16px;background:#fff;box-shadow:0 12px 40px #0b282530;pointer-events:auto;transition:width .16s ease,opacity .16s ease}
         .workbench.closed .main,.workbench.minimized .main{display:none}
-        .brand{display:flex;align-items:center;gap:10px;min-height:62px;padding:10px 12px;border-bottom:1px solid #e9efed;background:#fff}
+        .brand{display:flex;align-items:center;gap:10px;min-height:62px;padding:10px 12px;border-bottom:1px solid #e9efed;background:#fff;cursor:grab;touch-action:none;user-select:none}.brand.dragging,.rail-brand.dragging{cursor:grabbing}
         .brand img{width:34px;height:34px;object-fit:contain;border-radius:9px}.brand-copy{min-width:0;flex:1}.brand-name{font-size:15px;font-weight:750;letter-spacing:-.2px}.brand-tagline{font-size:12px;color:#687873}
         .head-actions{display:flex;gap:6px}.head-actions button,.launcher{width:32px;height:32px;border:1px solid #dce5e2;border-radius:8px;background:#fff;color:#53635e;cursor:pointer;font-size:17px}.head-actions button:hover,.launcher:hover{background:#f1f7f5}
         .page-content{min-height:0;max-height:calc(100vh - 88px);flex:0 1 auto;overflow:auto;overscroll-behavior:contain}.wb-page{display:none;padding:14px}.wb-page.active{display:block}.wb-page[data-slot]{height:auto;min-height:0;padding:0;overflow:visible}.wb-title{margin:0 0 4px;font-size:17px;font-weight:750}.wb-subtitle{margin:0 0 14px;color:#53625d;font-size:12px}.temu-guide{padding:14px 14px 0}
         .rail{display:flex;width:76px;flex:0 0 76px;flex-direction:column;align-items:stretch;gap:3px;padding:8px 5px;border:1px solid #dce6e3;border-radius:15px;background:#fff;box-shadow:0 8px 28px #0b28251c;pointer-events:auto}
-        .workbench.closed .rail{display:none}.rail-brand{display:grid;place-items:center;height:45px;margin-bottom:4px}.rail-brand img{width:35px;height:35px;object-fit:contain;border-radius:10px}
+        .workbench.closed .rail{display:none}.rail-brand{display:grid;place-items:center;height:45px;margin-bottom:4px;cursor:grab;touch-action:none;user-select:none}.rail-brand img{width:35px;height:35px;object-fit:contain;border-radius:10px}
         .nav{display:grid;gap:4px}.nav button{display:grid;justify-items:center;align-content:center;gap:3px;min-height:54px;padding:4px 1px;border:0;border-radius:9px;background:transparent;color:#53635e;cursor:pointer;font-size:10.5px;font-weight:600}.nav button span{white-space:nowrap}.nav svg{width:21px;height:21px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}.nav button:hover{background:#f2f7f6}.nav button[aria-current="page"]{color:#087e78;background:#ddf4f0;font-weight:750}.rail-bottom{margin-top:auto}.launcher{display:none;position:fixed;z-index:2147483002;right:16px;top:20px;width:auto;height:auto;padding:9px 13px;border:0;border-radius:22px;background:#087e78;color:#fff;box-shadow:0 4px 18px #102c2933;font-size:12.5px;font-weight:750;pointer-events:auto;touch-action:none;user-select:none;cursor:grab}.launcher:hover{background:#056c65}.launcher.dragging{cursor:grabbing}.workbench.closed~.launcher{display:block}
         .cards{display:grid;grid-template-columns:1fr 1fr;gap:9px}.tile,.session{padding:12px;border:1px solid #e5edeb;border-radius:11px;background:#fff}.tile strong{display:block;margin-top:5px;font-size:15px}.tile span,.muted{color:#7b8985;font-size:11px}.quick{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.wb-button{min-height:34px;padding:7px 10px;border:1px solid #cdded9;border-radius:8px;background:#fff;color:#14645b;cursor:pointer;font-weight:650}.wb-button:hover{background:#f1f8f6}.wb-button.primary{border-color:#07867d;background:#07867d;color:#fff}.wb-button:disabled{opacity:.5;cursor:not-allowed}.session-list,.log-list{display:grid;gap:8px}.session-head{display:flex;align-items:center;justify-content:space-between;gap:8px}.session strong{font-size:12px}.session p{margin:5px 0;color:#778580;font-size:11px}.log-list{max-height:calc(100vh - 180px);overflow:auto}.log-entry{padding:8px 9px;border:1px solid #e8eeec;border-radius:8px;color:#586864;font:11px/1.45 ui-monospace,Consolas,monospace;overflow-wrap:anywhere}.log-entry time{display:block;color:#97a29f;font:10px sans-serif;margin-bottom:3px}.setting{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:12px 0;border-bottom:1px solid #edf1f0}.setting strong{display:block}.setting input{width:17px;height:17px;accent-color:#07867d}.notice{padding:11px;border-radius:9px;background:#f1f6f5;color:#5c6c67}.error{background:#fff5e9;color:#885c21}.compact .wb-page{padding:10px}.compact .nav button{min-height:48px}.inactive{display:grid;gap:8px;padding:14px;border:1px dashed #cbd8d4;border-radius:10px;color:#5e6c68}.inactive a{color:#087e78;font-weight:650}
         @media(max-width:520px){.workbench{right:6px;top:6px;width:calc(100vw - 12px);gap:5px}.rail{width:72px;flex-basis:72px}.rail button{font-size:10px}}
       </style>
       <section class="workbench" aria-label="StoreSnapper 工作台">
-        <main class="main"><header class="brand"><img alt=""/><div class="brand-copy"><div class="brand-name">StoreSnapper</div><div class="brand-tagline">让跨境选品与采集更简单</div></div><div class="head-actions"><button type="button" data-action="minimize" aria-label="收起工作台" title="收起">−</button><button type="button" data-action="close" aria-label="关闭工作台" title="关闭">×</button></div></header><div class="page-content"></div></main>
-        <aside class="rail" aria-label="工作台导航"><div class="rail-brand"><img alt="StoreSnapper"/></div><nav class="nav"></nav></aside>
+        <main class="main"><header class="brand" title="按住此处拖动工作台"><img alt=""/><div class="brand-copy"><div class="brand-name">StoreSnapper</div><div class="brand-tagline">让跨境选品与采集更简单</div></div><div class="head-actions"><button type="button" data-action="minimize" aria-label="收起工作台" title="收起">−</button><button type="button" data-action="close" aria-label="关闭工作台" title="关闭">×</button></div></header><div class="page-content"></div></main>
+        <aside class="rail" aria-label="工作台导航"><div class="rail-brand" title="按住此处拖动工作台"><img alt="StoreSnapper"/></div><nav class="nav"></nav></aside>
       </section><button class="launcher" type="button" title="拖动调整 StoreSnapper 入口位置">StoreSnapper</button>`;
     shadow.append(frame);
     const shell = frame.querySelector('.workbench');
     const pageContent = frame.querySelector('.page-content');
     const nav = frame.querySelector('.nav');
+    const brand = frame.querySelector('.brand');
+    const railBrand = frame.querySelector('.rail-brand');
     const logo = chrome.runtime.getURL('assets/storesnapper-48.png');
     frame.querySelectorAll('img').forEach((img) => { img.src = logo; });
     const pageNames = { home: '工作台', temu: 'Temu 找货', tiktok: 'TikTok 采集', exports: '导出中心', logs: '运行日志', settings: '设置' };
@@ -87,40 +90,80 @@
     frame.querySelector('[data-action="minimize"]').addEventListener('click', () => { shell.classList.toggle('minimized'); });
     frame.querySelector('[data-action="close"]').addEventListener('click', () => { state.onClose(); shell.classList.add('closed'); });
     const launcher = frame.querySelector('.launcher');
-    let dragStart;
+    let launcherDragStart;
+    let workbenchDragStart;
     let suppressLauncherClick = false;
-    const clampLauncher = (left, top) => ({
-      left: Math.max(8, Math.min(window.innerWidth - launcher.offsetWidth - 8, left)),
-      top: Math.max(8, Math.min(window.innerHeight - launcher.offsetHeight - 8, top)),
+    const clampPosition = (element, position, fallbackWidth, fallbackHeight) => ({
+      left: Math.max(8, Math.min(window.innerWidth - (element.offsetWidth || fallbackWidth) - 8, position.left)),
+      top: Math.max(8, Math.min(window.innerHeight - (element.offsetHeight || fallbackHeight) - 8, position.top)),
     });
     const applyLauncherPosition = (position) => {
-      const clamped = clampLauncher(position.left, position.top);
+      // The launcher is display:none while the workbench is open. Use its
+      // approximate visible size during restore so a saved position stays on-screen.
+      const clamped = clampPosition(launcher, position, 112, 40);
       state.launcherPosition = clamped;
       launcher.style.left = `${clamped.left}px`;
       launcher.style.right = 'auto';
       launcher.style.top = `${clamped.top}px`;
     };
+    const applySharedPosition = (position) => {
+      const clamped = clampPosition(shell, position, Math.min(500, window.innerWidth - 24), 64);
+      state.workbenchPosition = clamped;
+      shell.style.left = `${clamped.left}px`;
+      shell.style.right = 'auto';
+      shell.style.top = `${clamped.top}px`;
+      applyLauncherPosition(clamped);
+    };
+    const startWorkbenchDrag = (event) => {
+      if (event.button !== 0 || event.target.closest?.('button,a,input,select,textarea,[contenteditable="true"]')) return;
+      const rect = shell.getBoundingClientRect();
+      workbenchDragStart = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, left: rect.left, top: rect.top, moved: false, handle: event.currentTarget };
+      try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* Pointer capture may be unavailable in synthetic input. */ }
+      event.preventDefault();
+    };
+    const moveWorkbenchDrag = (event) => {
+      if (!workbenchDragStart || event.pointerId !== workbenchDragStart.pointerId) return;
+      const dx = event.clientX - workbenchDragStart.x;
+      const dy = event.clientY - workbenchDragStart.y;
+      if (!workbenchDragStart.moved && Math.hypot(dx, dy) < 4) return;
+      workbenchDragStart.moved = true;
+      workbenchDragStart.handle.classList.add('dragging');
+      applySharedPosition({ left: workbenchDragStart.left + dx, top: workbenchDragStart.top + dy });
+    };
+    const finishWorkbenchDrag = (event) => {
+      if (!workbenchDragStart || (event?.pointerId !== undefined && event.pointerId !== workbenchDragStart.pointerId)) return;
+      const moved = workbenchDragStart.moved;
+      workbenchDragStart.handle.classList.remove('dragging');
+      workbenchDragStart = undefined;
+      if (moved) persistPrefs();
+    };
+    for (const handle of [brand, railBrand]) {
+      handle.addEventListener('pointerdown', startWorkbenchDrag);
+      handle.addEventListener('pointermove', moveWorkbenchDrag);
+      handle.addEventListener('pointerup', finishWorkbenchDrag);
+      handle.addEventListener('pointercancel', finishWorkbenchDrag);
+    }
     launcher.addEventListener('pointerdown', (event) => {
       if (event.button !== 0) return;
       const rect = launcher.getBoundingClientRect();
-      dragStart = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, left: rect.left, top: rect.top, moved: false };
-      launcher.setPointerCapture(event.pointerId);
+      launcherDragStart = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, left: rect.left, top: rect.top, moved: false };
+      try { launcher.setPointerCapture(event.pointerId); } catch { /* Pointer capture may be unavailable in synthetic input. */ }
       event.preventDefault();
     });
     launcher.addEventListener('pointermove', (event) => {
-      if (!dragStart || event.pointerId !== dragStart.pointerId) return;
-      const dx = event.clientX - dragStart.x;
-      const dy = event.clientY - dragStart.y;
-      if (!dragStart.moved && Math.hypot(dx, dy) < 4) return;
-      dragStart.moved = true;
+      if (!launcherDragStart || event.pointerId !== launcherDragStart.pointerId) return;
+      const dx = event.clientX - launcherDragStart.x;
+      const dy = event.clientY - launcherDragStart.y;
+      if (!launcherDragStart.moved && Math.hypot(dx, dy) < 4) return;
+      launcherDragStart.moved = true;
       suppressLauncherClick = true;
       launcher.classList.add('dragging');
-      applyLauncherPosition({ left: dragStart.left + dx, top: dragStart.top + dy });
+      applySharedPosition({ left: launcherDragStart.left + dx, top: launcherDragStart.top + dy });
     });
     const finishDrag = (event) => {
-      if (!dragStart || (event?.pointerId !== undefined && event.pointerId !== dragStart.pointerId)) return;
-      const moved = dragStart.moved;
-      dragStart = undefined;
+      if (!launcherDragStart || (event?.pointerId !== undefined && event.pointerId !== launcherDragStart.pointerId)) return;
+      const moved = launcherDragStart.moved;
+      launcherDragStart = undefined;
       launcher.classList.remove('dragging');
       if (moved) {
         persistPrefs();
@@ -133,7 +176,10 @@
       if (suppressLauncherClick) { event.preventDefault(); event.stopPropagation(); suppressLauncherClick = false; return; }
       shell.classList.remove('closed', 'minimized');
     });
-    window.addEventListener('resize', () => { if (state.launcherPosition) applyLauncherPosition(state.launcherPosition); });
+    window.addEventListener('resize', () => { if (state.workbenchPosition) applySharedPosition(state.workbenchPosition); });
+    if (typeof ResizeObserver !== 'undefined') new ResizeObserver(() => {
+      if (state.workbenchPosition) applySharedPosition(state.workbenchPosition);
+    }).observe(shell);
     settings.querySelectorAll('input').forEach((input) => input.addEventListener('change', () => {
       state[input.dataset.pref] = input.checked;
       shell.classList.toggle('compact', state.compactMode);
@@ -148,7 +194,7 @@
 
     function persistPrefs() {
       if (!chrome?.storage?.local || !state.prefsLoaded) return;
-      const prefs = { rememberLastView: state.rememberLastView, compactMode: Boolean(state.compactMode), lastPage: state.activePage, launcherPosition: state.launcherPosition };
+      const prefs = { rememberLastView: state.rememberLastView, compactMode: Boolean(state.compactMode), lastPage: state.activePage, launcherPosition: state.launcherPosition, workbenchPosition: state.workbenchPosition };
       void chrome.storage.local.set({ [PREF_KEY]: prefs });
     }
     function collectLogs() {
@@ -227,6 +273,14 @@
       if (pageId === 'exports') void renderExports();
       if (state.prefsLoaded && state.rememberLastView) persistPrefs();
     }
+    function restoredPageForMode(candidate) {
+      if (!PAGE_IDS.includes(candidate)) return state.activeMode === 'temu' || state.activeMode === 'tiktok' ? state.activeMode : 'home';
+      // A previous tab may have saved the other platform's page. Restore that
+      // platform's own landing page instead of showing a misleading inactive-mode notice.
+      if (state.activeMode === 'temu' && candidate === 'tiktok') return 'temu';
+      if (state.activeMode === 'tiktok' && candidate === 'temu') return 'tiktok';
+      return candidate;
+    }
     const api = {
       page(id) {
         if (!state.pages.has(id)) return null;
@@ -253,12 +307,13 @@
       const prefs = data[PREF_KEY] || {};
       state.rememberLastView = prefs.rememberLastView !== false;
       state.compactMode = Boolean(prefs.compactMode);
-      if (prefs.launcherPosition && Number.isFinite(prefs.launcherPosition.left) && Number.isFinite(prefs.launcherPosition.top)) applyLauncherPosition(prefs.launcherPosition);
+      const savedPosition = prefs.workbenchPosition || prefs.launcherPosition;
+      if (savedPosition && Number.isFinite(savedPosition.left) && Number.isFinite(savedPosition.top)) applySharedPosition(savedPosition);
       state.prefsLoaded = true;
       frame.querySelector('[data-pref="rememberLastView"]').checked = state.rememberLastView;
       frame.querySelector('[data-pref="compactMode"]').checked = state.compactMode;
       shell.classList.toggle('compact', state.compactMode);
-      if (!state.userNavigated && state.rememberLastView && PAGE_IDS.includes(prefs.lastPage)) activate(prefs.lastPage);
+      if (!state.userNavigated && state.rememberLastView) activate(restoredPageForMode(prefs.lastPage));
     }).catch(() => { state.prefsLoaded = true; });
     return api;
   }
