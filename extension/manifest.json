@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
-  "name": "StoreSnapper · Temu 1688 找货",
-  "version": "0.1.4",
-  "description": "在 Temu 分类和搜索商品列表中用主图搜索 1688 相似货源。",
-  "permissions": ["cookies", "scripting", "tabs"],
+  "name": "StoreSnapper · 电商工作台",
+  "version": "0.2.0",
+  "description": "Temu 图片找货与 TikTok Shop 商品管理采集。",
+  "permissions": ["cookies", "scripting", "tabs", "storage"],
   "host_permissions": [
     "https://www.temu.com/*",
     "https://img.kwcdn.com/*",
@@ -15,7 +15,8 @@
     "https://air.1688.com/*",
     "https://www.1688.com/*",
     "https://login.1688.com/*",
-    "https://detail.1688.com/*"
+    "https://detail.1688.com/*",
+    "https://seller.eu.tiktokshopglobalselling.com/*"
   ],
   "background": {
     "service_worker": "background.js",
@@ -25,6 +26,11 @@
     {
       "matches": ["https://www.temu.com/*"],
       "js": ["content.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://seller.eu.tiktokshopglobalselling.com/*"],
+      "js": ["tiktok-core.js", "tiktok-content.js"],
       "run_at": "document_idle"
     }
   ]

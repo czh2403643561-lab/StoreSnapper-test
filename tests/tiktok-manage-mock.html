@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TikTok 商品管理采集模拟页</title>
+  <style>
+    *{box-sizing:border-box}body{margin:0;font:14px/1.45 Arial,"Microsoft Yahei",sans-serif;color:#202a2a;background:#f4f5f6}
+    header{height:58px;background:#111;color:#fff;padding:17px 24px;font-weight:700}main{margin:30px auto;padding:24px;background:#fff;max-width:1120px;min-height:850px;border-radius:8px}
+    h1{margin:4px 0 22px;font-size:26px}.summary{margin:0 0 15px;color:#68716f}.table-wrap{border:1px solid #e2e4e5;border-radius:6px;overflow:hidden}
+    .core-table-container{padding:0 4px}.core-table-content-scroll{height:auto;overflow:visible}.small-mode .core-table-content-scroll{height:270px;overflow-y:auto}.core-table{width:100%;border-collapse:collapse;table-layout:fixed}
+    th,td{padding:9px;border-bottom:1px solid #e5e7e8;text-align:left;vertical-align:top}th{position:sticky;top:0;background:#fafafa;z-index:1}
+    td:nth-child(3){width:40%}.product{display:flex;gap:10px;align-items:flex-start;min-height:66px}.product img{width:54px;height:54px;object-fit:cover;border-radius:5px;background:#eee}.sku-row{height:32px;color:#68716f;background:#fff}.sku-row td{padding:5px 14px}
+    .core-pagination{display:flex;align-items:center;justify-content:flex-end;gap:14px;padding:15px;color:#52615d}.core-pagination ul{display:flex;gap:5px;list-style:none;padding:0;margin:0}.core-pagination li,.core-pagination-option{padding:5px 9px;border:1px solid #ddd;border-radius:4px;cursor:pointer}.core-pagination .core-pagination-item-active{background:#0caaa0;color:#fff;border-color:#0caaa0}.core-pagination-item-disabled{opacity:.4;cursor:not-allowed}.note{color:#6d7775;font-size:12px;margin-top:18px}
+  </style>
+</head>
+<body>
+  <header>TikTok Shop 商家中心 · 本地结构模拟（非真实商家数据）</header>
+  <main>
+    <h1>商品管理</h1>
+    <p class="summary" id="mock-note">本地测试页：按采样模拟 197 件、每页 50 件、4 页，并保留商品与 SKU 摘要混排行结构。商品数据是合成样例，不代表真实店铺记录。</p>
+    <section class="table-wrap">
+      <div class="core-table-container">
+        <div class="core-spin">
+          <div class="core-spin-children">
+            <div class="core-table-content-scroll">
+              <div class="core-table-content-inner">
+                <table class="core-table">
+                  <colgroup><col style="width:3%"><col style="width:3%"><col style="width:31%"><col style="width:16%"><col style="width:12%"><col style="width:8%"><col style="width:12%"><col style="width:12%"><col style="width:3%"></colgroup>
+                  <thead><tr><th></th><th></th><th>商品</th><th>表现</th><th>状态</th><th>库存</th><th>零售价</th><th>商品成长状态</th><th>操作</th></tr></thead>
+                  <tbody id="products"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="core-pagination">
+          <span class="core-pagination-total-text"></span>
+          <ul class="core-pagination-list" aria-label="分页"></ul>
+          <button class="core-pagination-option" type="button"></button>
+        </div>
+      </div>
+    </section>
+    <p class="note">该页面用于本地验证扩展识别、滚动采集、去重和人工翻页。它不替代真实 TikTok 商家页验收。</p>
+  </main>
+  <script>
+    const templates = [
+      {id:'1729956234269464701',title:"Women's Fluffy Thigh High Socks, Thick Warm Thermal Over Knee Socks for Winter, Soft Cosy Lounge Socks",sold:1,views:241,sales:'£6.99',stock:'1,799',retail:'£17.47',promo:'£6.99',skus:3,color:'#d8d1c3'},
+      {id:'1729964221905803389',title:'Rhinestone Gem Handbag Phone Case with Strap',sold:0,views:37,sales:'£0.00',stock:'13,800',retail:'£22.47',promo:'£8.99',skus:23,color:'#d5e6ee'},
+      {id:'1729964239048251517',title:'Blue Washed Denim Texture Phone Case',sold:0,views:23,sales:'£0.00',stock:'93,600',retail:'£22.47',promo:'£8.99',skus:156,color:'#9bb9cc'},
+      {id:'1729964186365958269',title:'Woven Texture Heart Card Holder Phone Case',sold:0,views:81,sales:'£0.00',stock:'109,200',retail:'£24.47',promo:'£9.79',skus:182,color:'#f0d3d8'},
+      {id:'1729964186365958270',title:'模拟商品 · Foldable Laptop Desk with Storage',sold:5,views:81,sales:'£45.00',stock:'920',retail:'£24.47',promo:'£19.79',skus:2,color:'#d5ddc7'},
+    ];
+    const parameters = new URLSearchParams(location.search);
+    const smallMode = parameters.has('small');
+    const emptyState = parameters.has('empty');
+    if (smallMode) document.body.classList.add('small-mode');
+    const totalProductCount = emptyState ? 0 : smallMode ? 5 : 197;
+    const pageSize = smallMode ? 3 : 50;
+    const totalPages = Math.ceil(totalProductCount / pageSize);
+    const allProducts = Array.from({ length: totalProductCount }, (_, index) => {
+      const template = templates[index % templates.length];
+      if (index < templates.length) return { ...template };
+      return { ...template, id: String(1800000000000000000n + BigInt(index)), title: `模拟商品 ${index + 1} · ${template.title}` };
+    });
+    const svg = (color) => `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect width="100" height="100" fill="${color}"/><circle cx="50" cy="50" r="22" fill="#ffffff"/></svg>`)}`;
+    let currentPage = 1;
+    const tbody = document.querySelector('#products');
+    const pagerList = document.querySelector('.core-pagination-list');
+    document.querySelector('.core-pagination-total-text').textContent = `总行数: ${totalProductCount}`;
+    document.querySelector('.core-pagination-option').textContent = `${pageSize}/页`;
+    document.querySelector('#mock-note').textContent = smallMode
+      ? '快速本地模拟：5 件商品，每页 3 件，用于短时间核对翻页、恢复和异常状态；数据为合成样例。'
+      : emptyState
+        ? '本地空列表模拟：验证总数为 0 时显示无商品状态。'
+        : '本地完整结构模拟：按采样模拟 197 件、每页 50 件、4 页；商品与 SKU 摘要行混排。商品数据是合成样例，不代表真实店铺记录。';
+    function renderPager() {
+      const controls = [`<li class="core-pagination-item-prev${currentPage <= 1 ? ' core-pagination-item-disabled' : ''}" aria-label="上一页" aria-disabled="${currentPage <= 1}">‹</li>`];
+      for (let page = 1; page <= totalPages; page += 1) {
+        controls.push(`<li class="core-pagination-item${page === currentPage ? ' core-pagination-item-active' : ''}" aria-label="第 ${page} 页"${page === currentPage ? ' aria-current="page"' : ''}>${page}</li>`);
+      }
+      controls.push(`<li class="core-pagination-item-next${currentPage >= totalPages ? ' core-pagination-item-disabled' : ''}" aria-label="下一页" aria-disabled="${currentPage >= totalPages}">›</li>`);
+      pagerList.innerHTML = controls.join('');
+      pagerList.querySelector('.core-pagination-item-prev').addEventListener('click', () => { if (currentPage > 1) { currentPage -= 1; renderRows(); } });
+      pagerList.querySelector('.core-pagination-item-next').addEventListener('click', () => { if (currentPage < totalPages) { currentPage += 1; renderRows(); } });
+      pagerList.querySelectorAll('.core-pagination-item').forEach((item) => item.addEventListener('click', () => { currentPage = Number(item.textContent); renderRows(); }));
+    }
+    const renderRows = () => {
+      const from = (currentPage - 1) * pageSize;
+      tbody.innerHTML = allProducts.slice(from, from + pageSize).map((product) => `
+        <tr class="product-row">
+          <td></td><td></td>
+          <td><div class="product"><img alt="" src="${svg(product.color)}"><span>${product.title} ID:${product.id}</span></div></td>
+          <td>已售出 ${product.sold} 件 浏览次数：${product.views} 销售额：${product.sales} 分析</td>
+          <td>在售 2026/10/23 12:58</td><td>${product.stock}</td>
+          <td>${product.retail} 促销价：${product.promo}</td><td>--</td><td></td>
+        </tr>
+        <tr class="sku-row"><td colspan="9">${product.skus} 个 SKU 展开</td></tr>`).join('');
+      renderPager();
+      if (smallMode) document.querySelector('.core-table-content-scroll').scrollTop = 0;
+    };
+    renderRows();
+  </script>
+</body>
+</html>
