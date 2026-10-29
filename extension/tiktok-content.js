@@ -18,7 +18,9 @@
   const state = {
     host: null,
     shadow: null,
-    workbench: null,
+    collectorTarget: null,
+    panelModel: null,
+    publishTimer: 0,
     panelExpanded: false,
     panelMinimized: false,
     mode: '识别中',
@@ -616,29 +618,16 @@
     if (state.host?.isConnected) return;
     state.host = document.createElement('div');
     state.host.id = 'storesnapper-tiktok-collector';
-    state.host.style.cssText = 'all:initial;position:fixed;z-index:2147483000;inset:0;pointer-events:none;';
+    state.host.style.cssText = 'all:initial;position:fixed;left:-10000px;top:0;width:400px;visibility:hidden;pointer-events:none;';
     state.shadow = state.host.attachShadow({ mode: 'closed' });
     document.documentElement.append(state.host);
-    state.workbench = window.StoreSnapperWorkbenchUI?.mount(state.shadow, { activeMode: 'tiktok' });
-    const collectorPage = state.workbench?.page('tiktok');
-    if (collectorPage) collectorPage.classList.add('collector-page');
-    const temuPage = state.workbench?.page('temu');
-    if (temuPage) temuPage.innerHTML = '<h1 class="wb-title">Temu 找货</h1><p class="wb-subtitle">支持首页、闪购、类目和搜索页的商品卡片主图。</p><div class="inactive">当前打开的是 TikTok Seller Center。<a href="https://www.temu.com/" target="_blank" rel="noopener noreferrer">打开 Temu 商品列表</a></div>';
-    state.workbench?.setLogsProvider(() => state.logs);
-    state.workbench?.setSummaryProvider(() => {
-      const count = Object.keys(state.session?.products || {}).length;
-      const page = pageSnapshot()?.paginationState;
-      const labels = { idle: '尚未开始', collecting: '采集中', checking: '检查中', paused: '已暂停', interrupted: '上次中断', needs_review: '待检查', page_complete: '本页完成', all_complete: '全部完成', paging: '正在翻页', error: '失败' };
-      return { mode: 'TikTok 商品管理采集', status: labels[state.status] || state.status || '待命', detail: `${count} 个已采集商品${page?.currentPage ? ` · 当前第 ${page.currentPage} 页` : ''}` };
-    });
+    state.collectorTarget = document.createElement('div');
+    state.shadow.append(state.collectorTarget);
     render();
   }
 
   function render(progress = {}) {
     if (!state.shadow) return;
-    state.workbench?.refreshSummary();
-    state.workbench?.refreshLogs();
-    const expanded = state.panelExpanded;
     const snapshot = pageSnapshot();
     const page = snapshot?.paginationState;
     const nativeNext = snapshot ? findNextControl(snapshot.pagination) : null;
@@ -669,14 +658,36 @@
       && (page?.totalPages ? page.currentPage >= page.totalPages : nativeNextDisabled);
     const canNext = !scopeMismatch && state.status !== 'paging' && activePage?.status === 'complete' && Boolean(nativeNext) && !nativeNextDisabled
       && page?.currentPage && (!page.totalPages || page.currentPage < page.totalPages) && !state.running;
-    const target = state.workbench?.page('tiktok');
+    state.panelModel = {
+      recognized: true,
+      status: statusLabel,
+      statusCode: scopeMismatch ? 'needs_review' : effectiveStatus,
+      page: currentPage,
+      totalPages: page?.totalPages ?? state.session?.total_pages ?? null,
+      pageCount,
+      expected: expected ?? null,
+      cumulative,
+      filterLabel: snapshot?.filters?.length ? '已记录' : '当前列表',
+      canStart: !state.running && state.status !== 'paging' && Boolean(snapshot && page?.currentPage && page?.totalRows !== 0),
+      startLabel: scopeMismatch ? '开始采集本页' : activePage || ['needs_review', 'interrupted', 'error'].includes(state.status) ? '重新检查本页' : '开始采集本页',
+      canPause: state.running || state.paused,
+      paused: state.paused,
+      canNext,
+      nextLabel: nextIsLast ? '已是最后一页' : nativeNext ? '采集下一页' : '下一页控件不可用',
+      canExport: cumulative > 0,
+      hint: scopeMismatch
+        ? '当前筛选与已保存数据不同；两组记录不会混合。点击“开始采集本页”切换到当前范围。'
+        : page?.totalRows === 0 ? '当前列表没有商品可采集。'
+          : '数量或主图未核实完整时会标为“待检查”；导出会保留已有数据并标记部分状态。',
+      logs: state.logs.slice(-80),
+    };
+    const target = state.collectorTarget;
     if (!target) return;
     target.replaceChildren();
     const style = document.createElement('style');
     style.textContent = `
       :host{all:initial;font:13px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#24312e}
       *{box-sizing:border-box}button{font:inherit;cursor:pointer}button:disabled{cursor:not-allowed;opacity:.48}
-      .collector-launcher{display:inline-block;border:0;border-radius:20px;background:#087e78;color:#fff;padding:10px 14px;box-shadow:0 4px 18px #172b2a33;font-weight:650}
       .panel{display:none;width:100%;max-height:calc(100vh - 88px);background:#fff;border:0;border-radius:0;box-shadow:none;overflow:hidden}
       .panel.expanded{display:block}.mode-heading{padding:12px 14px 0;font-size:14px;font-weight:750;color:#24312e}
       .body{max-height:calc(100vh - 130px);padding:10px 14px 14px;overflow:auto}.summary{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px}.metric{border:1px solid #edf0ef;border-radius:8px;padding:8px 9px}.metric span{display:block;font-size:12px;color:#586761;font-weight:550}.metric strong{font-size:16px;font-weight:750}.status{margin:0 0 10px;padding:8px 10px;border-radius:8px;background:#f2f6f5;color:#344740;font-weight:600}.status[data-kind="needs_review"],.status[data-kind="error"]{background:#fff4e8;color:#865211}.status[data-kind="all_complete"],.status[data-kind="page_complete"]{background:#eaf6f0;color:#216b48}
@@ -685,16 +696,8 @@
       @media(max-width:420px){.panel{width:100%}}
     `;
     target.append(style);
-    const launcher = button('商品采集', () => {
-      state.panelExpanded = true;
-      void persist();
-      render();
-    }, 'open', 'collector-launcher');
-    launcher.style.display = expanded ? 'none' : '';
-    launcher.setAttribute('aria-label', '打开 TikTok 商品管理采集');
-    target.append(launcher);
     const panel = document.createElement('section');
-    panel.className = `panel${expanded ? ' expanded' : ''}`;
+    panel.className = 'panel expanded';
     panel.setAttribute('aria-label', 'TikTok 商品管理采集');
     const modeHeading = document.createElement('div');
     modeHeading.className = 'mode-heading';
@@ -758,6 +761,15 @@
     body.append(details);
     panel.append(body);
     target.append(panel);
+    publishPanelState();
+  }
+
+  function publishPanelState() {
+    if (!state.panelModel) return;
+    clearTimeout(state.publishTimer);
+    state.publishTimer = setTimeout(() => {
+      void chrome.runtime.sendMessage({ type: 'STOREPANEL_STATE', mode: 'tiktok', state: state.panelModel }).catch(() => undefined);
+    }, 80);
   }
 
   function scheduleRecognition() {
@@ -794,23 +806,35 @@
       })();
       return true;
     }
-    if (message?.type !== 'STORESNAPPER_OPEN_WORKBENCH' || message.mode !== 'tiktok') return false;
-    void (async () => {
-      try {
+    if (message?.type === 'STORESNAPPER_GET_PANEL_STATE' && message.mode === 'tiktok') {
+      void (async () => {
+        const deadline = Date.now() + 1800;
+        while (!isTargetPage() && Date.now() < deadline) await wait(150);
+        if (!isTargetPage()) { sendResponse({ ok: true, mode: 'tiktok', state: { recognized: false } }); return; }
         if (!state.restoreDone) await restore();
-        state.panelExpanded = true;
-        state.panelMinimized = false;
-        await persist();
         ensureUi();
-        state.workbench?.setPage('tiktok');
-        state.workbench?.setExpanded(true);
         render();
-        sendResponse({ ok: true, mode: 'tiktok' });
-      } catch {
-        sendResponse({ ok: false, error: '无法打开 TikTok 采集工作台。' });
-      }
-    })();
-    return true;
+        sendResponse({ ok: true, mode: 'tiktok', state: state.panelModel });
+      })().catch(() => sendResponse({ ok: false, error: '无法读取 TikTok 采集状态。' }));
+      return true;
+    }
+    if (message?.type === 'TIKTOK_PANEL_ACTION' && isTargetPage()) {
+      ensureUi();
+      const action = ['start', 'pause', 'next', 'export'].includes(message.action) ? message.action : '';
+      const button = action && state.collectorTarget?.querySelector(`[data-action="${action}"]`);
+      if (!button || button.disabled) { sendResponse({ ok: false, error: '此操作当前不可用。' }); return false; }
+      void (async () => {
+        if (action === 'start' || action === 'next') {
+          state.panelExpanded = true;
+          state.panelMinimized = false;
+          await persist();
+        }
+        button.click();
+        sendResponse({ ok: true });
+      })().catch(() => sendResponse({ ok: false, error: '无法执行采集操作。' }));
+      return true;
+    }
+    return false;
   });
   observer.observe(document.documentElement, { subtree: true, childList: true });
   window.addEventListener('popstate', scheduleRecognition);

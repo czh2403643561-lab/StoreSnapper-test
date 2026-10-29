@@ -20,6 +20,17 @@ const LOGIN_URL = 'https://login.1688.com/member/signin.htm?Done=https%3A%2F%2Fw
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || typeof message.type !== 'string') return false;
+  if (message.type === 'OPEN_STORE_SIDEPANEL') {
+    const tabId = sender.tab?.id;
+    if (tabId === undefined || !chrome.sidePanel?.open) {
+      sendResponse({ ok: false, error: '当前 Chrome 版本不支持右侧功能面板。' });
+      return false;
+    }
+    void chrome.sidePanel.open({ tabId })
+      .then(() => sendResponse({ ok: true }))
+      .catch(() => sendResponse({ ok: false, error: '无法打开右侧功能面板，请点击工具栏图标重试。' }));
+    return true;
+  }
   if (message.type === 'DIAGNOSE_1688_IMAGE') {
     void diagnose1688Image(message.imageUrl)
       .then((result) => sendResponse({ ok: true, result }))

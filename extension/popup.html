@@ -10,14 +10,36 @@
   <main class="popup">
     <header class="brand">
       <img src="assets/storesnapper-48.png" alt="">
-      <div><strong>StoreSnapper</strong><span>电商工作台</span></div>
+      <div><strong>StoreSnapper</strong><span>当前页面功能自动识别</span></div>
     </header>
     <section class="context" aria-live="polite">
       <span class="status-dot"></span>
-      <div><strong class="context-title">正在识别当前页面…</strong><p class="context-detail">按网站和页面中实际的商品卡片判断可用功能。</p></div>
+      <div><strong class="context-title">正在识别当前页面…</strong><p class="context-detail">平台功能按当前标签页显示。</p></div>
     </section>
-    <div class="actions"></div>
-    <footer>在商品卡片主图上悬停，可开始图片找货。</footer>
+    <button class="action open-panel" type="button" hidden>打开当前页面功能</button>
+    <section class="utilities" aria-label="低频工具">
+      <details>
+        <summary>设置</summary>
+        <label class="setting"><input class="compact-setting" type="checkbox"><span><strong>紧凑货源卡片</strong><small>在右侧面板用更少空间浏览货源。</small></span></label>
+      </details>
+      <details>
+        <summary>导出与诊断</summary>
+        <div class="utility-actions">
+          <button class="action export-tiktok" type="button" hidden>导出 TikTok 采集 JSON</button>
+          <button class="action export-diagnostics" type="button" disabled>导出诊断 JSON</button>
+        </div>
+      </details>
+      <details>
+        <summary>运行日志</summary>
+        <pre class="logs">暂无记录</pre>
+        <button class="action copy-logs" type="button">复制日志</button>
+      </details>
+      <details>
+        <summary>关于</summary>
+        <p class="about">Temu 商品列表：悬停主图后点击放大镜。TikTok Seller Center：打开右侧面板后手动开始采集；翻页仍需你确认。</p>
+      </details>
+    </section>
+    <footer class="footer"></footer>
   </main>
   <script src="popup.js"></script>
 </body>

@@ -1,40 +1,19 @@
 (() => {
   const IMAGE_HOSTS = new Set(['img.kwcdn.com', 'img-eu.kwcdn.com', 'aimg.kwcdn.com']);
-  const OFFER_IMAGE_DIAGNOSTIC_HOSTS = new Set(['cbu01.alicdn.com']);
-  const MAX_IMAGE_DIAGNOSTICS = 60;
   const PRICE_PATTERN = /(?:£|\$|€|¥|￥)\s*\d[\d,.]*/;
   let routeUrl = location.href;
   let root;
   let shadow;
   let icon;
-  let panel;
-  let rail;
-  let titleNode;
-  let messageNode;
-  let actionsNode;
-  let cardsNode;
-  let resultsCountNode;
-  let diagnosticsNode;
-  let diagnosticsCountNode;
-  let diagnosticsPreNode;
-  let diagnosticsCopyButton;
-  let workbench;
   let activeImage;
   let activeHoverTarget;
   let activeProduct;
   let lastPointerX = 0;
   let lastPointerY = 0;
   let currentRequestId;
-  let imageDiagnostics = [];
-  let imageDiagnosticsByUrl = new Map();
-  let imageFallbacksByUrl = new Map();
-  let imageDiagnosticRuntime = new WeakMap();
-  const pageImagePolicyViolations = new Map();
-  let imageProbeCount = 0;
+  let lastDiagnosticState = '';
   let supported = false;
   const state = {
-    open: false,
-    collapsed: false,
     phase: 'idle',
     product: undefined,
     results: [],
@@ -49,7 +28,8 @@
   function isSupportedListing() {
     // Website recognition is intentionally independent of URL layout. Product cards
     // are checked separately so home, channel, category and search feeds can vary.
-    return isTemuHost() && !isProductLink(location.href);
+    return isTemuHost() && !isProductLink(location.href)
+      && !/\/(?:login|register|signup|account|checkout)(?:\.html|\/|$)/i.test(location.pathname);
   }
 
   function ensureUi() {
@@ -58,121 +38,9 @@
     root.id = 'storesnapper-temu-sourcing-root';
     root.style.cssText = 'position:fixed;inset:0;z-index:2147483647;pointer-events:none;';
     shadow = root.attachShadow({ mode: 'open' });
-    shadow.innerHTML = `
-      <style>
-        :host { all: initial; }
-        * { box-sizing: border-box; }
-        button { font: inherit; }
-        .icon {
-          position: fixed; display: none; place-items: center; width: 30px; height: 30px;
-          padding: 0; border: 1px solid rgba(20, 54, 44, .16); border-radius: 50%;
-          color: #174d3c; background: rgba(255,255,255,.96); box-shadow: 0 2px 8px rgba(0,0,0,.2);
-          cursor: pointer; pointer-events: auto; transition: transform .12s ease, opacity .12s ease;
-        }
-        .icon:hover, .icon:focus-visible { transform: scale(1.08); outline: 2px solid #1e7658; outline-offset: 1px; }
-        .icon svg { width: 16px; height: 16px; }
-        .panel { position:relative;display:flex;flex-direction:column;width:100%;max-width:none;max-height:calc(100vh - 88px);color:#202822;background:#fff;pointer-events:auto;font:13px/1.5 Arial,"Microsoft YaHei",sans-serif; }
-        .header {
-          display: flex; align-items: center; gap: 8px; padding: 12px 12px 10px;
-          border-bottom: 1px solid #e9eeeb; background: #fff;
-        }
-        .heading { min-width: 0; flex: 1; }
-        .heading strong { display: block; font-size: 15px; line-height: 20px; font-weight: 700; }
-        .product-title { overflow: hidden; margin-top: 2px; color: #52615b; font-size:12px; font-weight:550; text-overflow: ellipsis; white-space: nowrap; }
-        .header-button {
-          display: grid; place-items: center; width: 29px; height: 29px; flex: 0 0 auto;
-          border: 1px solid #e0e7e2; border-radius: 7px; color: #405148; background: #fff; cursor: pointer;
-        }
-        .header-button:hover { background: #f1f6f2; }
-        .scroll-area { min-height: 0; flex: 1 1 auto; overflow-y: auto; overscroll-behavior: contain; padding: 10px 10px 14px; }
-        .message {
-          margin: 0 0 9px; padding: 10px; border: 1px solid #e7ece8; border-radius: 9px;
-          color: #425048; background: #f8faf8;
-        }
-        .message[data-state="loading"] { color: #245c43; background: #f1f8f3; }
-        .message[data-state="auth"] { color: #684c15; border-color: #f0dfb5; background: #fff9e9; }
-        .message[data-state="error"] { color: #783d38; border-color: #f0d3cf; background: #fff6f5; }
-        .actions { display: flex; gap: 7px; margin: 0 0 10px; }
-        .action {
-          min-height: 32px; padding: 6px 9px; border: 1px solid #dce5de; border-radius: 7px;
-          color: #245c43; background: #fff; cursor: pointer;
-        }
-        .action.primary { color: #fff; border-color: #26734f; background: #26734f; }
-        .action:hover { filter: brightness(.97); }
-        .count { margin: 5px 1px 8px; color: #53615b; font-size: 12px; font-weight:600; }
-        .diagnostics { margin: 12px 0 0; padding-top: 8px; border-top: 1px solid #eef0ee; color: #77817a; font-size: 10px; }
-        .diagnostics summary { cursor: pointer; }
-        .diagnostic-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; margin-top: 7px; color: #77522c; font-size: 11px; }
-        .diagnostic-count { min-width: 0; flex: 1; line-height: 1.4; }
-        .diagnostic-copy { flex: 0 0 auto; white-space: nowrap; }
-        .diagnostics .action { min-height: 27px; padding: 4px 7px; font-size: 10px; }
-        .diagnostics pre { max-height: 220px; overflow: auto; margin: 6px 0 0; color: #4d463f; font: 10px/1.4 Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
-        .cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
-        .card {
-          min-width: 0; overflow: hidden; padding: 0; border: 1px solid #e6ebe7; border-radius: 9px;
-          text-align: left; color: inherit; background: #fff; cursor: pointer;
-        }
-        .card:hover { border-color: #83aa92; box-shadow: 0 2px 8px rgba(25, 77, 51, .1); }
-        .card-image, .image-placeholder { display: grid; place-items: center; width: 100%; aspect-ratio: 1; background: #f3f5f3; }
-        .card-image { object-fit: contain; }
-        .card-image-rendered { display: block; width: 100%; aspect-ratio: 1; object-fit: contain; background: #f3f5f3; }
-        .image-placeholder { padding: 8px; color: #8b938e; font-size: 11px; text-align: center; }
-        .card-info { padding: 7px 7px 8px; }
-        .card-title { display: -webkit-box; height: 36px; overflow: hidden; margin: 0 0 6px; color: #303a35; font-size: 12px; font-weight:550; line-height: 17px; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
-        .price { min-height: 19px; margin-bottom: 5px; color: #a83e32; font-size: 14px; font-weight: 700; }
-        .meta { display: flex; flex-direction: column; gap: 2px; color: #4f5d56; font-size: 11px; font-weight:500; }
-        .supplier { overflow: hidden; margin-top: 6px; color: #3c5145; font-size: 11px; font-weight:500; text-overflow: ellipsis; white-space: nowrap; }
-        .badge { display: inline-block; max-width: 100%; overflow: hidden; margin: 5px 3px 0 0; padding: 2px 5px; border-radius: 4px; color: #486453; background: #eff5f0; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
-        .icon[hidden], .panel[hidden], .actions[hidden], .message[hidden], .count[hidden], .diagnostics[hidden] { display: none !important; }
-        @media (max-width: 320px) { .cards { grid-template-columns: 1fr; } }
-      </style>
-      <button class="icon" type="button" aria-label="在1688按图搜索" title="在1688按图搜索">
-        <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round">
-          <circle cx="10.8" cy="10.8" r="6.4"></circle><path d="m15.6 15.6 4.4 4.4"></path>
-        </svg>
-      </button>
-      <aside class="panel" aria-label="1688 相似货源" hidden>
-        <div class="header">
-          <div class="heading"><strong>1688 相似货源</strong><div class="product-title"></div></div>
-        </div>
-        <div class="scroll-area">
-          <p class="message" role="status" aria-live="polite"></p>
-          <div class="actions" hidden></div>
-          <p class="count" hidden></p>
-          <div class="cards"></div>
-          <details class="diagnostics" hidden aria-label="货源图片加载诊断">
-            <summary>查看图片诊断日志</summary>
-            <div class="diagnostic-head"><span class="diagnostic-count"></span><button class="action diagnostic-copy" type="button">复制诊断日志</button></div>
-            <pre></pre>
-          </details>
-        </div>
-      </aside>
-    `;
+    shadow.innerHTML = '<style>:host{all:initial}.icon{position:fixed;display:none;place-items:center;width:30px;height:30px;padding:0;border:1px solid rgba(20,54,44,.16);border-radius:50%;color:#174d3c;background:rgba(255,255,255,.97);box-shadow:0 2px 8px rgba(0,0,0,.2);cursor:pointer;pointer-events:auto;transition:transform .12s ease}.icon:hover,.icon:focus-visible{transform:scale(1.08);outline:2px solid #1e7658;outline-offset:1px}.icon svg{width:16px;height:16px}</style><button class="icon" type="button" aria-label="在1688按图搜索" title="在1688按图搜索"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"><circle cx="10.8" cy="10.8" r="6.4"></circle><path d="m15.6 15.6 4.4 4.4"></path></svg></button>';
     document.documentElement.append(root);
     icon = shadow.querySelector('.icon');
-    panel = shadow.querySelector('.panel');
-    titleNode = shadow.querySelector('.product-title');
-    messageNode = shadow.querySelector('.message');
-    actionsNode = shadow.querySelector('.actions');
-    cardsNode = shadow.querySelector('.cards');
-    resultsCountNode = shadow.querySelector('.count');
-    diagnosticsNode = shadow.querySelector('.diagnostics');
-    diagnosticsCountNode = shadow.querySelector('.diagnostic-count');
-    diagnosticsPreNode = shadow.querySelector('.diagnostics pre');
-    diagnosticsCopyButton = shadow.querySelector('.diagnostic-copy');
-    workbench = window.StoreSnapperWorkbenchUI?.mount(shadow, { activeMode: 'temu', expanded: false, onClose: () => closePanel(true) });
-    const temuPage = workbench?.page('temu');
-    if (temuPage) {
-      const guide = document.createElement('section');
-      guide.className = 'temu-guide';
-      guide.innerHTML = '<h1 class="wb-title">已识别 Temu</h1><p class="wb-subtitle">首页、闪购、类目和搜索页均可识别商品卡片。悬停商品主图后点击放大镜开始搜图。</p>';
-      temuPage.append(guide, panel);
-    }
-    const tiktokPage = workbench?.page('tiktok');
-    if (tiktokPage) tiktokPage.innerHTML = '<h1 class="wb-title">TikTok 商品管理采集</h1><p class="wb-subtitle">仅在 Seller Center 商品管理页提供采集操作。</p><div class="inactive">当前打开的是 Temu 页面。<a href="https://seller.eu.tiktokshopglobalselling.com/product/manage?shop_region=GB" target="_blank" rel="noopener noreferrer">打开 TikTok Seller Center 商品管理页</a></div>';
-    workbench?.setSummaryProvider(() => ({ mode: 'Temu 找货', status: state.product ? phaseMessage(state.phase) || '搜索完成' : '待命', detail: state.product?.title || '悬停商品主图后点击放大镜开始搜索' }));
-    workbench?.setLogsProvider(() => imageDiagnostics.slice(-30).map((item) => ({ at: item.at || '', step: '图片诊断', message: `${item.image?.host || '图片'}：${item.probe?.message || item.fallback || item.pageImageLoad || '检查中'}` })));
-
     icon.addEventListener('pointerleave', hideIcon);
     icon.addEventListener('blur', hideIcon);
     icon.addEventListener('click', (event) => {
@@ -181,16 +49,6 @@
       event.stopImmediatePropagation();
       if (activeProduct) void startSearch(activeProduct);
     });
-    diagnosticsCopyButton.addEventListener('click', async () => {
-      try {
-        await navigator.clipboard.writeText(JSON.stringify(imageDiagnostics, null, 2));
-        diagnosticsCopyButton.textContent = '已复制';
-      } catch {
-        diagnosticsCopyButton.textContent = '复制受限，可展开后手动复制';
-        diagnosticsNode.open = true;
-      }
-    });
-    render();
   }
 
   function getCandidate(media) {
@@ -353,23 +211,13 @@
   async function startSearch(product) {
     if (!supported || !product?.imageUrl) return;
     ensureUi();
-    state.open = true;
-    state.collapsed = false;
+    void chrome.runtime.sendMessage({ type: 'OPEN_STORE_SIDEPANEL' }).catch(() => undefined);
     state.phase = 'preparing';
     state.product = product;
     state.results = [];
     state.message = '正在准备商品图片…';
     state.issue = undefined;
-    workbench?.setPage('temu');
-    workbench?.setExpanded(true);
-    workbench?.addLog('搜图', `开始搜索 Temu 商品图片：${product.title || '未命名商品'}`);
     currentRequestId = crypto.randomUUID();
-    imageDiagnostics = [];
-    imageDiagnosticsByUrl = new Map();
-    imageFallbacksByUrl = new Map();
-    imageDiagnosticRuntime = new WeakMap();
-    pageImagePolicyViolations.clear();
-    imageProbeCount = 0;
     const requestId = currentRequestId;
     hideIcon();
     render();
@@ -382,43 +230,38 @@
       if (!response?.ok) {
         state.phase = 'failed';
         state.message = response?.error || '无法启动 1688 搜图，请重试。';
-        workbench?.addLog('搜图', `搜索未启动：${state.message}`);
         render();
       }
     } catch {
       if (requestId !== currentRequestId) return;
       state.phase = 'failed';
       state.message = '插件后台暂不可用。请在扩展管理页重新加载插件后重试。';
-      workbench?.addLog('搜图', state.message);
       render();
     }
   }
 
   function render() {
-    if (!shadow) return;
-    workbench?.refreshSummary();
-    workbench?.refreshLogs();
-    panel.hidden = !state.open;
-    titleNode.textContent = state.product?.title || 'Temu 商品';
-    messageNode.hidden = state.phase === 'ready';
-    messageNode.textContent = state.message || phaseMessage(state.phase) || '悬停 Temu 商品主图后，点击放大镜搜索相似货源。';
-    messageNode.dataset.state = ['preparing', 'uploading', 'searching', 'enriching'].includes(state.phase)
-      ? 'loading' : state.phase === 'needs-auth' ? 'auth' : ['failed', 'empty'].includes(state.phase) ? 'error' : 'ready';
-    cardsNode.replaceChildren(...state.results.map(createCard));
-    resultsCountNode.hidden = !state.results.length;
-    resultsCountNode.textContent = state.results.length ? `${state.results.length} 个相似货源` : '';
-    renderImageDiagnostics();
-
-    actionsNode.replaceChildren();
-    const needsActions = ['needs-auth', 'failed', 'empty'].includes(state.phase);
-    actionsNode.hidden = !needsActions;
-    if (state.phase === 'needs-auth') {
-      actionsNode.append(makeAction('在 1688 登录／验证', 'primary', openLogin));
-      actionsNode.append(makeAction('已完成，重新搜索', '', retrySearch));
-    } else if (needsActions) {
-      actionsNode.append(makeAction('重新搜索', 'primary', retrySearch));
-      if (state.phase === 'needs-auth') actionsNode.append(makeAction('在 1688 登录', '', openLogin));
+    if (!supported) return;
+    const diagnosticState = `${state.phase}:${state.results.length}`;
+    if (state.phase !== 'idle' && diagnosticState !== lastDiagnosticState) {
+      lastDiagnosticState = diagnosticState;
+      const phase = state.phase;
+      const resultCount = state.results.length;
+      void chrome.storage.local.get('storesnapper_diagnostics_v1').then((stored) => {
+        const records = Array.isArray(stored.storesnapper_diagnostics_v1) ? stored.storesnapper_diagnostics_v1 : [];
+        records.push({ at: new Date().toISOString(), type: 'temu_search', phase, resultCount });
+        return chrome.storage.local.set({ storesnapper_diagnostics_v1: records.slice(-100) });
+      }).catch(() => undefined);
     }
+    void chrome.runtime.sendMessage({ type: 'STOREPANEL_STATE', mode: 'temu', state: {
+      recognized: true,
+      phase: state.phase,
+      title: state.product?.title || '',
+      message: state.message || phaseMessage(state.phase) || '悬停 Temu 商品主图，点击放大镜开始搜图。',
+      count: state.results.length,
+      results: state.results,
+      hasProduct: Boolean(state.product),
+    } }).catch(() => undefined);
   }
 
   function phaseMessage(phase) {
@@ -431,226 +274,6 @@
     if (phase === 'failed') return '搜索失败，请重试。';
     if (phase === 'ready') return '';
     return '';
-  }
-
-  function makeAction(label, variant, handler) {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = `action ${variant}`.trim();
-    button.textContent = label;
-    button.addEventListener('click', handler);
-    return button;
-  }
-
-  function createCard(item) {
-    const card = document.createElement('button');
-    card.type = 'button';
-    card.className = 'card';
-    card.setAttribute('aria-label', `打开 1688 相似货源：${item.title || '商品详情'}`);
-    const imageUrl = safeHttpsUrl(item.image_url);
-    if (imageUrl) {
-      const image = document.createElement('img');
-      image.className = 'card-image';
-      image.loading = 'lazy';
-      image.referrerPolicy = 'no-referrer';
-      image.alt = item.title || '1688 商品图片';
-      image.addEventListener('error', () => {
-        recordImageFailure(item, imageUrl, image);
-      }, { once: true });
-      card.append(image);
-      image.src = imageUrl;
-    } else {
-      const placeholder = document.createElement('div');
-      placeholder.className = 'image-placeholder';
-      placeholder.textContent = '商品图片暂无';
-      card.append(placeholder);
-    }
-
-    const info = document.createElement('div');
-    info.className = 'card-info';
-    const title = document.createElement('p');
-    title.className = 'card-title';
-    title.textContent = item.title || '商品标题暂无';
-    const price = document.createElement('div');
-    price.className = 'price';
-    price.textContent = item.price?.display || '价格暂无';
-    const meta = document.createElement('div');
-    meta.className = 'meta';
-    const minimum = document.createElement('span');
-    minimum.textContent = `起批：${item.minimum_order || '暂无'}`;
-    const sales = document.createElement('span');
-    sales.textContent = `销量：${item.sales || '暂无'}`;
-    meta.append(minimum, sales);
-    info.append(title, price, meta);
-    if (item.supplier_name) {
-      const supplier = document.createElement('div');
-      supplier.className = 'supplier';
-      supplier.textContent = `供应商：${item.supplier_name}`;
-      info.append(supplier);
-    }
-    if (item.supplier_years) {
-      const years = document.createElement('span');
-      years.className = 'badge';
-      years.textContent = item.supplier_years;
-      info.append(years);
-    }
-    if (Array.isArray(item.badges)) {
-      for (const value of item.badges.slice(0, 2)) {
-        const badge = document.createElement('span');
-        badge.className = 'badge';
-        badge.textContent = value;
-        info.append(badge);
-      }
-    }
-    card.append(info);
-    card.addEventListener('click', () => {
-      void chrome.runtime.sendMessage({ type: 'OPEN_1688_OFFER', offerId: item.offer_id }).catch(() => undefined);
-    });
-    return card;
-  }
-
-  function recordImageFailure(item, imageUrl, image) {
-    let parsedUrl;
-    try { parsedUrl = new URL(imageUrl); } catch { return; }
-    let record = imageDiagnosticsByUrl.get(imageUrl);
-    if (!record) {
-      record = {
-        offerId: String(item.offer_id || ''),
-        title: cleanTitle(item.title || '').slice(0, 100),
-        image: { host: parsedUrl.hostname, path: parsedUrl.pathname },
-        pageImageLoad: 'error',
-        occurrences: 0,
-        pagePolicy: pageImagePolicyViolations.get(parsedUrl.hostname),
-        fallback: 'checking',
-        probe: { state: 'checking', message: '正在读取图片并核对页面拦截情况…' },
-      };
-      imageDiagnosticsByUrl.set(imageUrl, record);
-      imageDiagnostics.push(record);
-      imageDiagnosticRuntime.set(record, { started: false, pendingImages: new Set() });
-    }
-    record.occurrences += 1;
-    const runtime = imageDiagnosticRuntime.get(record);
-    runtime.pendingImages.add(image);
-    const cachedFallback = imageFallbacksByUrl.get(imageUrl);
-    if (cachedFallback) {
-      void paintFallbackImage(image, cachedFallback, record);
-      renderImageDiagnostics();
-      return;
-    }
-    renderImageDiagnostics();
-
-    if (runtime.started) return;
-    runtime.started = true;
-    if (imageProbeCount >= MAX_IMAGE_DIAGNOSTICS) {
-      record.fallback = 'skipped';
-      record.probe = { state: 'skipped', message: `已达到单次搜索 ${MAX_IMAGE_DIAGNOSTICS} 张图片的诊断上限；此图未触发扩展侧补画。` };
-      replaceWithImagePlaceholder(image, '图片暂不可用 · 查看诊断');
-      renderImageDiagnostics();
-      return;
-    }
-    imageProbeCount += 1;
-    const requestId = currentRequestId;
-    void chrome.runtime.sendMessage({ type: 'DIAGNOSE_1688_IMAGE', imageUrl })
-      .then((response) => {
-        if (requestId !== currentRequestId || imageDiagnosticsByUrl.get(imageUrl) !== record) return;
-        const result = response?.result;
-        const { imageDataBase64, imageMimeType, ...probe } = result || {};
-        record.probe = probe || { state: 'error', message: response?.error || '诊断请求没有返回结果。' };
-        if (!response?.ok || !imageDataBase64) {
-          record.fallback = 'unavailable';
-          for (const pendingImage of runtime.pendingImages) replaceWithImagePlaceholder(pendingImage, '图片暂不可用 · 查看诊断');
-          renderImageDiagnostics();
-          return;
-        }
-        const fallback = { base64: imageDataBase64, mimeType: imageMimeType || 'image/webp' };
-        imageFallbacksByUrl.set(imageUrl, fallback);
-        record.fallback = 'drawing';
-        for (const pendingImage of runtime.pendingImages) void paintFallbackImage(pendingImage, fallback, record);
-        renderImageDiagnostics();
-      })
-      .catch((error) => {
-        if (requestId !== currentRequestId || imageDiagnosticsByUrl.get(imageUrl) !== record) return;
-        record.fallback = 'unavailable';
-        record.probe = { state: 'error', message: error?.name === 'TypeError' ? '无法连接扩展后台，请重新加载插件后再试。' : '扩展后台无法完成图片诊断。' };
-        for (const pendingImage of runtime.pendingImages) replaceWithImagePlaceholder(pendingImage, '图片暂不可用 · 查看诊断');
-        renderImageDiagnostics();
-      });
-  }
-
-  async function paintFallbackImage(image, fallback, record) {
-    if (!image.isConnected || image.dataset.fallbackStarted === 'true') return;
-    image.dataset.fallbackStarted = 'true';
-    let bitmap;
-    try {
-      const binary = atob(fallback.base64);
-      const bytes = new Uint8Array(binary.length);
-      for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
-      bitmap = await createImageBitmap(new Blob([bytes], { type: fallback.mimeType }));
-      if (!image.isConnected || !currentRequestId) return;
-      const canvas = document.createElement('canvas');
-      canvas.className = 'card-image-rendered';
-      canvas.width = bitmap.width;
-      canvas.height = bitmap.height;
-      canvas.setAttribute('role', 'img');
-      canvas.setAttribute('aria-label', image.alt || '1688 商品图片');
-      canvas.title = image.alt || '1688 商品图片';
-      const context = canvas.getContext('2d', { alpha: false });
-      if (!context) throw new Error('CanvasUnavailable');
-      context.drawImage(bitmap, 0, 0);
-      image.replaceWith(canvas);
-      record.fallback = 'canvas_rendered';
-    } catch (error) {
-      record.fallback = error?.name === 'SecurityError' ? 'canvas_blocked' : 'decode_failed';
-      replaceWithImagePlaceholder(image, '图片暂不可用 · 查看诊断');
-    } finally {
-      bitmap?.close();
-    }
-    renderImageDiagnostics();
-  }
-
-  function replaceWithImagePlaceholder(image, label) {
-    if (!image.isConnected) return;
-    const placeholder = document.createElement('div');
-    placeholder.className = 'image-placeholder';
-    placeholder.textContent = label;
-    image.replaceWith(placeholder);
-  }
-
-  function renderImageDiagnostics() {
-    if (!diagnosticsNode) return;
-    diagnosticsNode.hidden = imageDiagnostics.length === 0;
-    const originalFailures = imageDiagnostics.filter((record) => record.pageImageLoad === 'error').length;
-    const restored = imageDiagnostics.filter((record) => record.fallback === 'canvas_rendered').length;
-    const unresolved = imageDiagnostics.filter((record) => ['unavailable', 'canvas_blocked', 'decode_failed', 'skipped'].includes(record.fallback)).length;
-    const pending = imageDiagnostics.filter((record) => ['checking', 'drawing'].includes(record.fallback)).length;
-    const counts = [
-      `原图未显示 ${originalFailures}`,
-      `插件已补画 ${restored}`,
-      `仍不可用 ${unresolved}`,
-    ];
-    if (pending) counts.push(`处理中 ${pending}`);
-    diagnosticsCountNode.textContent = counts.join(' · ');
-    diagnosticsPreNode.textContent = JSON.stringify(imageDiagnostics, null, 2);
-  }
-
-  function onImagePolicyViolation(event) {
-    if (!String(event.effectiveDirective || '').toLowerCase().startsWith('img-src')) return;
-    let blockedHost = '';
-    try { blockedHost = new URL(event.blockedURI, location.href).hostname; } catch { return; }
-    if (!OFFER_IMAGE_DIAGNOSTIC_HOSTS.has(blockedHost)) return;
-    const policy = { directive: event.effectiveDirective, disposition: event.disposition || 'enforce' };
-    pageImagePolicyViolations.set(blockedHost, policy);
-    for (const record of imageDiagnostics) {
-      if (record.image.host === blockedHost) record.pagePolicy = policy;
-    }
-    renderImageDiagnostics();
-  }
-
-  function safeHttpsUrl(value) {
-    try {
-      const url = new URL(value);
-      return url.protocol === 'https:' ? url.href : '';
-    } catch { return ''; }
   }
 
   async function retrySearch() {
@@ -667,8 +290,6 @@
   }
 
   function closePanel(cancel) {
-    state.open = false;
-    state.collapsed = false;
     const oldRequestId = currentRequestId;
     currentRequestId = undefined;
     if (cancel && oldRequestId) void chrome.runtime.sendMessage({ type: 'CANCEL_SEARCH', requestId: oldRequestId }).catch(() => undefined);
@@ -676,26 +297,34 @@
   }
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message?.type === 'STORESNAPPER_OPEN_WORKBENCH' && message.mode === 'temu' && supported) {
-      ensureUi();
-      workbench?.setPage('temu');
-      workbench?.setExpanded(true);
-      sendResponse({ ok: true, mode: 'temu' });
+    if (message?.type === 'STORESNAPPER_GET_PANEL_STATE' && supported) {
+      sendResponse({ ok: true, mode: 'temu', state: {
+        recognized: true,
+        phase: state.phase,
+        title: state.product?.title || '',
+        message: state.message || phaseMessage(state.phase) || '悬停 Temu 商品主图，点击放大镜开始搜图。',
+        count: state.results.length,
+        results: state.results,
+        hasProduct: Boolean(state.product),
+      } });
       return false;
+    }
+    if (message?.type === 'TEMU_PANEL_ACTION' && supported) {
+      if (message.action === 'retry') void retrySearch().then(() => sendResponse({ ok: true }));
+      else if (message.action === 'login') void openLogin().then(() => sendResponse({ ok: true }));
+      else sendResponse({ ok: false });
+      return true;
     }
     if (message?.type !== 'SEARCH_UPDATE' || message.requestId !== currentRequestId) return;
     state.phase = message.state || 'failed';
     state.results = Array.isArray(message.results) ? message.results : [];
     state.message = message.message || phaseMessage(state.phase);
     state.issue = message.issue;
-    if (message.state === 'ready') workbench?.addLog('搜图', `1688 返回 ${state.results.length} 个相似货源。`);
-    else if (['failed', 'needs-auth', 'empty'].includes(message.state)) workbench?.addLog('搜图', phaseMessage(message.state) || state.message || '搜索未完成。');
     render();
   });
 
   document.addEventListener('pointerover', onPointerOver, true);
   document.addEventListener('pointerout', onPointerOut, true);
-  document.addEventListener('securitypolicyviolation', onImagePolicyViolation, true);
   document.addEventListener('load', (event) => {
     if (!(event.target instanceof HTMLImageElement)) return;
     const rect = event.target.getBoundingClientRect();
@@ -726,8 +355,6 @@
       root = undefined;
       shadow = undefined;
       icon = undefined;
-      panel = undefined;
-      workbench = undefined;
     }
     hideIcon();
   }
