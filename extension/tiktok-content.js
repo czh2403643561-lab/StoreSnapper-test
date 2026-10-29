@@ -18,6 +18,8 @@
   const state = {
     host: null,
     shadow: null,
+    panelExpanded: false,
+    panelMinimized: false,
     mode: '识别中',
     status: 'idle',
     session: null,
@@ -215,6 +217,8 @@
       total_pages: snapshot.paginationState.totalPages,
       total_rows: snapshot.paginationState.totalRows,
       page_size: snapshot.paginationState.pageSize,
+      panel_expanded: state.panelExpanded,
+      panel_minimized: state.panelMinimized,
       pages: [],
       products: {},
       logs: [],
@@ -222,6 +226,13 @@
     state.sessionKey = `storesnapper_tiktok_scope_${snapshot.scopeId}`;
     state.status = 'idle';
     state.targetPage = null;
+  }
+
+  function restorePanelPreferences(session) {
+    state.panelExpanded = typeof session?.panel_expanded === 'boolean'
+      ? session.panel_expanded
+      : Boolean(session?.pages?.length || (session?.status && session.status !== 'idle'));
+    state.panelMinimized = Boolean(session?.panel_minimized);
   }
 
   async function restore() {
@@ -234,6 +245,7 @@
       const stored = await chrome.storage.local.get(key);
       if (stored[key]) {
         state.session = stored[key];
+        restorePanelPreferences(state.session);
         const interrupted = ['collecting', 'checking', 'paused', 'paging'].includes(state.session.status);
         const pageChanged = state.session.current_page && Number(state.session.current_page) !== Number(snapshot.paginationState.currentPage);
         if (interrupted) state.session.status = 'interrupted';
@@ -262,6 +274,8 @@
     state.session.updated_at = new Date().toISOString();
     state.session.status = state.status;
     state.session.logs = state.logs.slice(-120);
+    state.session.panel_expanded = state.panelExpanded;
+    state.session.panel_minimized = state.panelMinimized;
     try { await chrome.storage.local.set({ [state.sessionKey]: state.session }); }
     catch (error) { state.status = 'error'; state.session.status = 'error'; }
   }
@@ -364,7 +378,10 @@
     if (state.session && state.session.scope_id !== snapshot.scopeId) {
       ensureSession(snapshot);
       const restored = await chrome.storage.local.get(state.sessionKey);
-      if (restored[state.sessionKey]) state.session = restored[state.sessionKey];
+      if (restored[state.sessionKey]) {
+        state.session = restored[state.sessionKey];
+        restorePanelPreferences(state.session);
+      }
     } else ensureSession(snapshot);
     if (state.session.current_page && Number(state.session.current_page) !== Number(snapshot.paginationState.currentPage) && !recheck) {
       state.status = 'needs_review';
@@ -606,8 +623,8 @@
 
   function render(progress = {}) {
     if (!state.shadow) return;
-    const expanded = state.shadow.querySelector('.panel')?.classList.contains('expanded') || false;
-    const minimized = state.shadow.querySelector('.panel')?.classList.contains('minimized') || false;
+    const expanded = state.panelExpanded;
+    const minimized = state.panelMinimized;
     const snapshot = pageSnapshot();
     const page = snapshot?.paginationState;
     const nativeNext = snapshot ? findNextControl(snapshot.pagination) : null;
@@ -653,7 +670,11 @@
       @media(max-width:420px){.panel{width:min(360px,calc(100vw - 24px))}}
     `;
     state.shadow.append(style);
-    const launcher = button('商品采集', () => { state.shadow.querySelector('.panel')?.classList.add('expanded'); render(); }, 'open', 'launcher');
+    const launcher = button('商品采集', () => {
+      state.panelExpanded = true;
+      void persist();
+      render();
+    }, 'open', 'launcher');
     launcher.style.display = expanded ? 'none' : '';
     launcher.setAttribute('aria-label', '打开 TikTok 商品管理采集');
     state.shadow.append(launcher);
@@ -666,10 +687,18 @@
     heading.innerHTML = '<div class="title">TikTok 商品管理采集</div><div class="sub">仅采集当前商品管理页</div>';
     const headActions = document.createElement('div');
     headActions.className = 'head-actions';
-    const minimize = button(minimized ? '+' : '−', () => { state.shadow.querySelector('.panel')?.classList.toggle('minimized'); render(); }, 'collapse', 'icon');
+    const minimize = button(minimized ? '+' : '−', () => {
+      state.panelMinimized = !state.panelMinimized;
+      void persist();
+      render();
+    }, 'collapse', 'icon');
     minimize.setAttribute('aria-label', minimized ? '展开采集面板' : '收起采集面板');
     headActions.append(minimize);
-    headActions.append(button('×', () => { state.shadow.querySelector('.panel')?.classList.remove('expanded'); render(); }, 'close', 'icon'));
+    headActions.append(button('×', () => {
+      state.panelExpanded = false;
+      void persist();
+      render();
+    }, 'close', 'icon'));
     head.append(heading, headActions);
     panel.append(head);
     const body = document.createElement('div');
@@ -743,12 +772,12 @@
         return;
       }
       state.mode = 'TikTok 商品管理采集';
-      ensureUi();
       if (!state.restoreDone) await restore();
       else if (state.session && state.lastScope !== pageSnapshot()?.scopeId && !state.running) {
         state.status = 'needs_review';
         log('范围', '筛选条件可能已变化。此前数据已保留；请导出或在新范围重新开始。');
       }
+      ensureUi();
       render();
     }, 350);
   }
