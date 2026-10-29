@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="zh-Hans">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>平板、笔记本配件 · Temu 页面结构仿真</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; color: #222; background: #fff; font: 15px/1.45 Arial, "Microsoft YaHei", sans-serif; }
+    header { display: flex; align-items: center; gap: 24px; min-height: 62px; padding: 0 34px; border-bottom: 1px solid #eee; }
+    .brand { color: #fb7700; font-size: 24px; font-weight: 800; }
+    .search { width: min(480px, 45vw); padding: 11px 16px; border: 1px solid #ddd; border-radius: 22px; background: #fafafa; }
+    .layout { display: grid; grid-template-columns: 200px 1fr; gap: 30px; max-width: 1320px; margin: 22px auto; padding: 0 24px; }
+    nav { color: #5d625f; }
+    nav p { padding: 10px 12px; border-radius: 8px; }
+    nav p:first-child { color: #222; background: #f4f4f4; font-weight: 700; }
+    h1 { margin: 2px 0 18px; font-size: 22px; }
+    .toolbar { display: flex; justify-content: space-between; margin: 16px 0; color: #666; }
+    .grid { display: grid; grid-template-columns: repeat(4, minmax(170px, 1fr)); gap: 18px; }
+    .product-card { display: block; overflow: hidden; border-radius: 10px; color: inherit; text-decoration: none; }
+    .product-card:hover { box-shadow: 0 3px 14px #0002; }
+    .product-card img { display: block; width: 100%; height: auto; aspect-ratio: 1; object-fit: cover; background: #f5f5f5; }
+    .product-info { padding: 9px 4px; }
+    .product-title { min-height: 42px; margin: 0 0 7px; font-size: 13px; }
+    .price { margin: 0; color: #222; font-size: 19px; font-weight: 700; }
+    .sold { margin: 5px 0 0; color: #777; font-size: 12px; }
+    .decorative { width: 48px; height: 48px; object-fit: contain; }
+    @media (max-width: 900px) { .grid { grid-template-columns: repeat(2, minmax(145px, 1fr)); } }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">temu</div>
+    <div class="search">搜索商品、品牌和关键词</div>
+    <img class="decorative" src="https://aimg.kwcdn.com/upload_aimg/my/a3bd0bbe-248c-4089-b407-13e13bda28d1.png.slim.png?imageView2/2/w/800/q/70/format/avif" alt="账户图标">
+  </header>
+  <div class="layout">
+    <nav aria-label="商品分类">
+      <p>平板、笔记本配件</p>
+      <p>保护壳与套</p>
+      <p>支架与收纳</p>
+      <p>键盘与触控笔</p>
+    </nav>
+    <main>
+      <h1>平板、笔记本配件</h1>
+      <div class="toolbar"><span>为您精选</span><span>排序：默认　筛选</span></div>
+      <section class="grid" aria-label="商品列表">
+        <a class="product-card" href="https://www.temu.com/goods.html?goods_id=601234567890123">
+          <img class="lazy-image" width="500" height="500" loading="eager" alt="商品图片 便携式折叠支架，适用于智能手机和平板" src="https://img.kwcdn.com/product/open/ae76843d97b34c0b81a59221461c1d5d-goods.jpeg?imageView2/2/w/500/q/90/format/avif%7CimageVqr/2">
+          <div class="product-info"><p class="product-title">便携式折叠支架，适用于智能手机和平板</p><p class="price">£4.96</p><p class="sold">已售 2,000+</p></div>
+        </a>
+        <a class="product-card" href="https://www.temu.com/goods.html?goods_id=601234567890124">
+          <img class="lazy-image" width="500" height="500" loading="eager" alt="商品图片 电子阅读器硅胶手带支架和保护套" src="https://img.kwcdn.com/product/open/a623288fbfc84101b57233d4174157ba-goods.jpeg?imageView2/2/w/500/q/90/format/avif%7CimageVqr/2">
+          <div class="product-info"><p class="product-title">电子阅读器硅胶手带支架和保护套</p><p class="price">£5.48</p><p class="sold">已售 900+</p></div>
+        </a>
+        <a class="product-card" href="https://www.temu.com/goods.html?goods_id=601234567890125">
+          <img class="lazy-image" width="500" height="500" loading="eager" alt="商品图片 韩版简约平板电脑包，轻便防震" src="https://img.kwcdn.com/product/open/beb658a71dad4a2494ffa12fbc4fbd7e-goods.jpeg?imageView2/2/w/500/q/90/format/avif%7CimageVqr/2">
+          <div class="product-info"><p class="product-title">韩版简约平板电脑包，轻便防震</p><p class="price">£7.20</p><p class="sold">已售 1,100+</p></div>
+        </a>
+        <a class="product-card" href="https://www.temu.com/goods.html?goods_id=601234567890126">
+          <img class="lazy-image" width="500" height="500" loading="eager" alt="商品图片 ins风平板保护套，带笔槽和支架" src="https://img.kwcdn.com/product/fancy/4e1b114f-16b8-4801-88d8-8b83a227fe41.jpg?imageView2/2/w/500/q/90/format/avif%7CimageVqr/2">
+          <div class="product-info"><p class="product-title">ins风平板保护套，带笔槽和支架</p><p class="price">£8.10</p><p class="sold">已售 650+</p></div>
+        </a>
+      </section>
+    </main>
+  </div>
+</body>
+</html>

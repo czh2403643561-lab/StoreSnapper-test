@@ -1,0 +1,458 @@
+import {
+  SearchFailure,
+  buildSearchUrl,
+  md5,
+  mergeOfficialResults,
+  normalizeOfficialOffer,
+  officialSearchPageUrl,
+  parseImageSessionResponse,
+  parseResponseText,
+  parseSearchResponseText,
+} from './core.mjs';
+
+const jobsByTab = new Map();
+const IMAGE_HOSTS = new Set(['img.kwcdn.com', 'aimg.kwcdn.com']);
+const LOGIN_URL = 'https://login.1688.com/member/signin.htm?Done=https%3A%2F%2Fwww.1688.com%2F';
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (!message || typeof message.type !== 'string') return false;
+  if (message.type === 'SEARCH_IMAGE') {
+    const tabId = sender.tab?.id;
+    if (tabId === undefined) {
+      sendResponse({ ok: false, error: '请从 Temu 商品图片启动搜图。' });
+      return false;
+    }
+    const job = startJob(tabId, message, sendResponse);
+    if (!job) {
+      sendResponse({ ok: false, error: '商品图片信息无效，请重试。' });
+      return false;
+    }
+    return true;
+  }
+  if (message.type === 'CANCEL_SEARCH') {
+    void cancelJob(sender.tab?.id, message.requestId);
+    sendResponse({ ok: true });
+    return false;
+  }
+  if (message.type === 'OPEN_1688_LOGIN') {
+    void chrome.tabs.create({ url: LOGIN_URL, active: true }).then(() => sendResponse({ ok: true })).catch(() => sendResponse({ ok: false, error: '无法打开 1688 登录页。' }));
+    return true;
+  }
+  if (message.type === 'OPEN_1688_OFFER') {
+    const id = String(message.offerId || '');
+    if (!/^\d{8,}$/.test(id)) {
+      sendResponse({ ok: false, error: '1688 商品编号无效。' });
+      return false;
+    }
+    void chrome.tabs.create({ url: `https://detail.1688.com/offer/${id}.html`, active: true })
+      .then(() => sendResponse({ ok: true }))
+      .catch(() => sendResponse({ ok: false, error: '无法打开 1688 商品页。' }));
+    return true;
+  }
+  return false;
+});
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  const sourceJob = jobsByTab.get(tabId);
+  if (sourceJob) void cancelJob(tabId, sourceJob.requestId);
+  for (const job of jobsByTab.values()) {
+    if (job.officialTabId === tabId) {
+      job.officialTabId = undefined;
+      job.officialTabClosed = true;
+    }
+  }
+});
+
+function startJob(tabId, message, respond) {
+  const requestId = String(message.requestId || '');
+  const imageUrl = String(message.imageUrl || '');
+  let parsed;
+  try { parsed = new URL(imageUrl); } catch { return undefined; }
+  if (parsed.protocol !== 'https:' || !IMAGE_HOSTS.has(parsed.hostname) || !requestId) return undefined;
+
+  const previous = jobsByTab.get(tabId);
+  if (previous) {
+    previous.controller.abort();
+    finishResponse(previous, { ok: false, cancelled: true });
+    void closeOfficialTab(previous);
+  }
+  const job = {
+    tabId,
+    requestId,
+    imageUrl: parsed.href,
+    title: String(message.title || '').slice(0, 220),
+    controller: new AbortController(),
+    respond,
+    state: 'preparing',
+    officialTabId: undefined,
+    officialTabClosed: false,
+  };
+  jobsByTab.set(tabId, job);
+  void runSearch(job);
+  return job;
+}
+
+async function runSearch(job) {
+  try {
+    publish(job, 'preparing', { message: '正在准备商品图片…' });
+    const imageData = await prepareImage(job.imageUrl, job.controller.signal);
+    assertCurrent(job);
+    publish(job, 'uploading', { message: '正在提交图片到 1688…' });
+    const session = await uploadImage(imageData, job.controller.signal);
+    assertCurrent(job);
+    publish(job, 'searching', { message: '正在搜索相似货源…' });
+    const page = await searchOffers(session, job.controller.signal);
+    assertCurrent(job);
+
+    if (!page.results.length) {
+      publish(job, 'empty', { results: [], message: '1688 本次没有返回相似货源。可以换一张主图后重试。' });
+      return;
+    }
+
+    publish(job, 'enriching', {
+      results: page.results,
+      message: '已找到相似货源，正在读取 1688 官方卡片信息…',
+      disclaimer: '以下是图片相似结果，需自行核实款式、价格和库存。',
+    });
+
+    let finalResults = page.results;
+    let enrichment = 'partial';
+    let enrichmentMessage = '已保留接口返回的相似货源；部分官方卡片信息暂不可用。';
+    try {
+      const official = await readOfficialResults(job, page.session, job.controller.signal);
+      assertCurrent(job);
+      if (official.issue === 'challenge') {
+        enrichmentMessage = '1688 官方结果页要求安全验证；已保留接口返回的相似货源。';
+      } else if (official.issue === 'login') {
+        enrichmentMessage = '1688 官方结果页需要登录；已保留接口返回的相似货源。';
+      } else if (official.results.length) {
+        finalResults = mergeOfficialResults(page.results, official.results);
+        enrichment = 'complete';
+        enrichmentMessage = '已显示 1688 返回的相似货源。';
+      }
+    } catch (error) {
+      if (job.controller.signal.aborted) throw error;
+      enrichmentMessage = '已保留接口返回的相似货源；官方卡片补全暂不可用。';
+    }
+    assertCurrent(job);
+    publish(job, 'ready', {
+      results: finalResults,
+      enrichment,
+      message: enrichmentMessage,
+      disclaimer: '图片搜索结果仅供参考；请在 1688 核实商品、价格、起批量和库存。',
+    });
+  } catch (error) {
+    if (job.controller.signal.aborted || !isCurrent(job)) return;
+    const failure = error instanceof SearchFailure ? error : new SearchFailure('failed', error?.message || '1688 图片搜索失败，请重试。');
+    publish(job, failure.code === 'auth' ? 'needs-auth' : 'failed', {
+      issue: failure.issue,
+      results: [],
+      message: failure.message,
+    });
+  } finally {
+    await closeOfficialTab(job);
+    finishResponse(job, { ok: true, requestId: job.requestId, state: job.state });
+  }
+}
+
+async function prepareImage(imageUrl, signal) {
+  const { response, blob: source } = await requestBlob(imageUrl, {
+    credentials: 'omit',
+    referrerPolicy: 'no-referrer',
+    headers: { Accept: 'image/avif,image/webp,image/png,image/jpeg,*/*;q=0.5' },
+  }, 20_000, signal, '商品图片加载超时，请重试。');
+  if (!response.ok) throw new SearchFailure('failed', `商品图片加载失败（HTTP ${response.status}）。`);
+  if (!source.type.startsWith('image/')) throw new SearchFailure('failed', '下载内容不是有效图片，请换一张主图重试。');
+  if (source.size > 15 * 1024 * 1024) throw new SearchFailure('failed', '商品图片文件过大，请换一张主图重试。');
+
+  try {
+    const bitmap = await createImageBitmap(source);
+    if (bitmap.width < 100 || bitmap.height < 100) {
+      bitmap.close();
+      throw new SearchFailure('failed', '商品主图分辨率太低，请换一张图片重试。');
+    }
+    const scale = Math.min(1, 900 / Math.max(bitmap.width, bitmap.height));
+    const width = Math.max(100, Math.round(bitmap.width * scale));
+    const height = Math.max(100, Math.round(bitmap.height * scale));
+    const canvas = new OffscreenCanvas(width, height);
+    const context = canvas.getContext('2d');
+    if (!context) throw new SearchFailure('failed', '无法处理商品图片，请重试。');
+    context.fillStyle = '#ffffff';
+    context.fillRect(0, 0, width, height);
+    context.drawImage(bitmap, 0, 0, width, height);
+    bitmap.close();
+    const jpeg = await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.88 });
+    return await blobToDataUrl(jpeg);
+  } catch (error) {
+    if (error instanceof SearchFailure) throw error;
+    if (/image\/(?:jpeg|png)/i.test(source.type)) return blobToDataUrl(source);
+    throw new SearchFailure('failed', '图片格式转换失败，请换一张商品主图重试。');
+  }
+}
+
+async function blobToDataUrl(blob) {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+  return `data:${blob.type || 'image/jpeg'};base64,${btoa(binary)}`;
+}
+
+async function getMtopToken() {
+  const byUrl = await chrome.cookies.getAll({ url: 'https://h5api.m.1688.com/', name: '_m_h5_tk' }).catch(() => []);
+  const byDomain = await chrome.cookies.getAll({ domain: '1688.com', name: '_m_h5_tk' }).catch(() => []);
+  const cookie = [...byUrl, ...byDomain].find((item) => item.value);
+  const fromCookieApi = tokenFromCookie(cookie?.value || '');
+  if (fromCookieApi) return fromCookieApi;
+
+  // Some Chrome session stores expose the signed-in page cookie to the page but
+  // not to chrome.cookies.getAll(). Read only the MTop token from an open 1688
+  // tab after the user explicitly starts a search; never persist or log it.
+  const tabs = await chrome.tabs.query({ url: ['https://www.1688.com/*', 'https://search.1688.com/*'] }).catch(() => []);
+  for (const tab of tabs) {
+    if (tab.id === undefined) continue;
+    const injected = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: () => document.cookie.split(';').map((item) => item.trim())
+        .find((item) => item.startsWith('_m_h5_tk='))?.slice('_m_h5_tk='.length) || '',
+    }).catch(() => []);
+    const token = tokenFromCookie(injected[0]?.result || '');
+    if (token) return token;
+  }
+  return '';
+}
+
+function tokenFromCookie(value) {
+  try { return decodeURIComponent(value).split('_')[0].trim(); } catch { return ''; }
+}
+
+async function uploadImage(dataUrl, signal) {
+  const base64 = dataUrl.replace(/^data:image\/[^;]+;base64,/i, '');
+  if (base64.length < 100) throw new SearchFailure('failed', '待搜索图片内容无效。');
+  const body = JSON.stringify({ imageBase64: base64, appName: 'searchImageUpload', appKey: 'pvvljh1grxcmaay2vgpe9nb68gg9ueg2' });
+  let token = await getMtopToken();
+  if (!token) throw new SearchFailure('auth', '请先打开 1688 并完成登录，再重新搜索。', 'login');
+
+  let data = await uploadRequest(body, token, signal);
+  let auth = authFromData(data);
+  if (auth?.issue === 'session') {
+    token = await getMtopToken();
+    if (token) {
+      data = await uploadRequest(body, token, signal);
+      auth = authFromData(data);
+    }
+  }
+  if (auth) throw auth;
+  return parseImageSessionResponse(data);
+}
+
+async function uploadRequest(body, token, signal) {
+  const time = Date.now().toString();
+  const url = new URL('https://h5api.m.1688.com/h5/mtop.1688.imageservice.putimage/1.0/');
+  const params = {
+    jsv: '2.7.2', appKey: '12574478', t: time,
+    sign: md5(`${token}&${time}&12574478&${body}`),
+    api: 'mtop.1688.imageService.putImage', ecode: '0', v: '1.0', type: 'originaljson', dataType: 'jsonp',
+  };
+  Object.entries(params).forEach(([key, value]) => url.searchParams.set(key, value));
+  const { response, text } = await requestText(url.href, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: `data=${encodeURIComponent(body)}`,
+  }, 30_000, signal, '等待 1688 图片上传超时，请重试。');
+  if (!response.ok) {
+    try { return parseResponseText(text); } catch (error) { if (error instanceof SearchFailure) throw error; }
+    throw new SearchFailure('failed', `1688 图片上传失败（HTTP ${response.status}）。`);
+  }
+  return parseResponseText(text);
+}
+
+async function searchOffers(session, signal) {
+  const { response, text } = await requestText(buildSearchUrl(session, 1, 20), {
+    credentials: 'include',
+    headers: { Accept: 'application/json, text/plain, */*' },
+  }, 25_000, signal, '等待 1688 搜索结果超时，请重试。');
+  if (!response.ok) {
+    try { return parseSearchResponseText(text, session); } catch (error) { if (error instanceof SearchFailure && error.code === 'auth') throw error; }
+    throw new SearchFailure('failed', `1688 图搜请求失败（HTTP ${response.status}）。`);
+  }
+  return parseSearchResponseText(text, session);
+}
+
+async function readOfficialResults(job, session, signal) {
+  if (job.officialTabClosed) return { results: [], issue: undefined };
+  const tab = await chrome.tabs.create({ url: officialSearchPageUrl(session), active: false });
+  if (tab.id === undefined) throw new SearchFailure('failed', '无法打开 1688 官方结果页。');
+  job.officialTabId = tab.id;
+  try {
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      await delay(900, signal);
+      assertCurrent(job);
+      if (job.officialTabClosed) return { results: [] };
+      const currentTab = await chrome.tabs.get(tab.id).catch(() => undefined);
+      if (!currentTab) return { results: [] };
+      if (/login\.1688\.com|member\/signin/i.test(currentTab.url || '')) return { results: [], issue: 'login' };
+      const injected = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: readOfficialImageSearchCards,
+      }).catch(() => []);
+      const data = injected[0]?.result;
+      if (data?.issue) return { results: [], issue: data.issue };
+      if (Array.isArray(data?.offers) && data.offers.length) {
+        return { results: data.offers.map(normalizeOfficialOffer).filter(Boolean) };
+      }
+    }
+    return { results: [] };
+  } finally {
+    await closeOfficialTab(job);
+  }
+}
+
+function readOfficialImageSearchCards() {
+  const bodyText = (document.body?.innerText || '').slice(0, 12_000);
+  const currentUrl = location.href;
+  if (/login\.1688\.com|member\/signin/i.test(currentUrl) || /请登录|登录后继续/i.test(bodyText)) return { issue: 'login', offers: [] };
+  if (/_____tmd_____|punish|captcha|验证码|安全验证|FAIL_SYS_USER_VALIDATE/i.test(bodyText)) return { issue: 'challenge', offers: [] };
+
+  const cards = [...document.querySelectorAll('[class*="searchOfferWrapper"]')];
+  const seen = new Set();
+  const textOf = (element) => (element?.textContent || '').replace(/\s+/g, ' ').trim();
+  const offers = cards.flatMap((card) => {
+    const links = [...card.querySelectorAll('a[href*="detail.1688.com/offer/"], a[href*="offerId="]')];
+    const href = links.find((link) => /(?:\/offer\/|[?&]offerId=)\d{8,}/i.test(link.href))?.href || '';
+    const id = href.match(/(?:\/offer\/|[?&]offerId=)(\d{8,})/i)?.[1] || '';
+    if (!id || seen.has(id)) return [];
+    seen.add(id);
+    const desc = [...card.querySelectorAll('[class*="descText"]')]
+      .map((item) => (item.innerText || item.textContent || '').replace(/\s+/g, ' ').trim()).filter(Boolean);
+    const sales = desc.find((item) => /^(?:\d+(?:\.\d+)?(?:万|千|[Kk])?\+?)件$/.test(item));
+    const minimum = desc.find((item) => /^\d+件起批$/.test(item));
+    const supplierRow = textOf(card.querySelector('[class*="offerShopRow"]'));
+    const years = supplierRow.match(/入驻\s*(\d+)\s*年/)?.[1];
+    const supplier = supplierRow.replace(/^入驻\s*\d+\s*年\s*/, '').replace(/旺旺在线.*$/u, '').trim();
+    const title = textOf(card.querySelector('[class*="titleText"], [class*="offerTitle"], [class*="subject"]'));
+    const image = card.querySelector('img.mainImg, img[class*="mainImg"], img[src]');
+    const priceCandidates = [...card.querySelectorAll('[class*="priceItem"], [class*="price-item"], [class*="priceValue"], [class*="offerPrice"]')]
+      .filter((element) => !element.querySelector('[class*="descText"], [class*="offerDesc"]'))
+      .sort((left, right) => left.querySelectorAll('*').length - right.querySelectorAll('*').length);
+    const priceText = (priceCandidates[0]?.textContent || card.textContent || '').replace(/\s+/g, ' ')
+      .replace(/(\d)\s*\.\s*(\d)/g, '$1.$2').replace(/([¥￥])\s+/g, '$1');
+    const priceMatch = priceText.match(/(?:¥|￥)\s*(\d+(?:\.\d+)?)(?:\s*[-–~至]\s*(?:¥|￥)?\s*(\d+(?:\.\d+)?))?/);
+    const price = priceMatch ? (priceMatch[2] ? `${priceMatch[1]}-${priceMatch[2]}` : priceMatch[1]) : undefined;
+    const repurchase = desc.find((item) => /^回头率\s*\d+(?:\.\d+)?%$/.test(item));
+    const shipping = desc.find((item) => /(?:\d+H发|\d+小时发|\d+天达|后天达)/i.test(item));
+    return [{
+      offer_id: id,
+      href,
+      title,
+      picture: image?.currentSrc || image?.src || '',
+      price,
+      sales,
+      minOrderQuantity: minimum,
+      repurchaseRate: repurchase,
+      shippingTimeGuarantee: shipping,
+      shops: { opened_year: years, shop_name: supplier },
+    }];
+  });
+  return { offers };
+}
+
+async function requestText(url, options, timeout, parentSignal, timeoutMessage) {
+  return withTimeout(async (signal) => {
+    const response = await fetch(url, { ...options, signal });
+    return { response, text: await response.text() };
+  }, timeout, parentSignal, timeoutMessage);
+}
+
+async function requestBlob(url, options, timeout, parentSignal, timeoutMessage) {
+  return withTimeout(async (signal) => {
+    const response = await fetch(url, { ...options, signal });
+    return { response, blob: await response.blob() };
+  }, timeout, parentSignal, timeoutMessage);
+}
+
+async function withTimeout(operation, timeout, parentSignal, timeoutMessage) {
+  const controller = new AbortController();
+  let timedOut = false;
+  const abortFromParent = () => controller.abort(parentSignal.reason);
+  if (parentSignal?.aborted) abortFromParent();
+  else parentSignal?.addEventListener('abort', abortFromParent, { once: true });
+  const timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeout);
+  try {
+    return await operation(controller.signal);
+  } catch (error) {
+    if (parentSignal?.aborted) throw parentSignal.reason || error;
+    if (timedOut) throw new SearchFailure('failed', timeoutMessage);
+    throw error;
+  } finally {
+    clearTimeout(timer);
+    parentSignal?.removeEventListener('abort', abortFromParent);
+  }
+}
+
+function authFromData(data) {
+  const message = [data?.ret, data?.msg, data?.message].flat().filter(Boolean).map(String).join('；');
+  if (/TOKEN|SESSION_EXPIRED|NOT_LOGIN|登录/i.test(message)) return new SearchFailure('auth', '1688登录状态已失效，请重新登录后重试。', 'session');
+  if (/FAIL_SYS_USER_VALIDATE|RGV587|CAPTCHA|安全|验证|PUNISH|X5SECDATA/i.test(message)) return new SearchFailure('auth', '1688暂时要求完成安全验证，请在 1688 页面处理后重试。', 'challenge');
+  return undefined;
+}
+
+function publish(job, state, fields = {}) {
+  if (!isCurrent(job)) return;
+  job.state = state;
+  void chrome.tabs.sendMessage(job.tabId, {
+    type: 'SEARCH_UPDATE',
+    requestId: job.requestId,
+    state,
+    ...fields,
+  }).catch(() => undefined);
+}
+
+function isCurrent(job) {
+  return jobsByTab.get(job.tabId) === job && !job.controller.signal.aborted;
+}
+
+function assertCurrent(job) {
+  if (!isCurrent(job)) throw new DOMException('Search superseded', 'AbortError');
+}
+
+async function cancelJob(tabId, requestId) {
+  if (tabId === undefined) return;
+  const job = jobsByTab.get(tabId);
+  if (!job || (requestId && job.requestId !== requestId)) return;
+  jobsByTab.delete(tabId);
+  job.controller.abort();
+  finishResponse(job, { ok: false, cancelled: true });
+  await closeOfficialTab(job);
+}
+
+function finishResponse(job, value) {
+  const respond = job.respond;
+  if (!respond) return;
+  job.respond = undefined;
+  try { respond(value); } catch { /* The requesting tab may already be closed. */ }
+}
+
+async function closeOfficialTab(job) {
+  const tabId = job.officialTabId;
+  job.officialTabId = undefined;
+  if (tabId !== undefined) await chrome.tabs.remove(tabId).catch(() => undefined);
+}
+
+function delay(milliseconds, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) { reject(signal.reason || new DOMException('Aborted', 'AbortError')); return; }
+    const timer = setTimeout(finish, milliseconds);
+    function finish() {
+      signal.removeEventListener('abort', abort);
+      resolve();
+    }
+    function abort() {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', abort);
+      reject(signal.reason || new DOMException('Aborted', 'AbortError'));
+    }
+    signal.addEventListener('abort', abort, { once: true });
+  });
+}
