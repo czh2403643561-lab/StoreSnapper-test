@@ -171,22 +171,26 @@
     render();
   }
 
-  function getCandidate(image) {
-    if (!(image instanceof HTMLImageElement) || !image.isConnected || !image.complete) return undefined;
-    const rect = image.getBoundingClientRect();
-    if (rect.width < 90 || rect.height < 90 || rect.width > 1100 || rect.height > 1100) return undefined;
-    if (image.naturalWidth < 160 || image.naturalHeight < 160) return undefined;
+  function getCandidate(media) {
+    const isImage = media instanceof HTMLImageElement;
+    const isVideoPoster = media instanceof HTMLVideoElement && Boolean(media.poster || media.getAttribute('poster'));
+    if ((!isImage && !isVideoPoster) || !media.isConnected || (isImage && !media.complete)) return undefined;
+    const rect = media.getBoundingClientRect();
+    if (rect.width < 72 || rect.height < 72 || rect.width > 1100 || rect.height > 1100) return undefined;
+    if (isImage && (media.naturalWidth < 120 || media.naturalHeight < 120)) return undefined;
     const ratio = rect.width / rect.height;
     if (ratio < 0.75 || ratio > 1.35) return undefined;
-    if (getComputedStyle(image).visibility === 'hidden' || getComputedStyle(image).display === 'none') return undefined;
+    if (getComputedStyle(media).visibility === 'hidden' || getComputedStyle(media).display === 'none') return undefined;
 
-    const imageUrl = image.currentSrc || image.getAttribute('data-src') || image.getAttribute('src') || '';
+    const imageUrl = isImage
+      ? media.currentSrc || media.getAttribute('data-src') || media.getAttribute('src') || ''
+      : media.poster || media.getAttribute('poster') || '';
     let parsedImage;
     try { parsedImage = new URL(imageUrl, location.href); } catch { return undefined; }
     if (parsedImage.protocol !== 'https:' || !IMAGE_HOSTS.has(parsedImage.hostname)) return undefined;
 
     const ancestors = [];
-    for (let node = image.parentElement, depth = 0; node && depth < 7 && node !== document.body; node = node.parentElement, depth += 1) ancestors.push(node);
+    for (let node = media.parentElement, depth = 0; node && depth < 7 && node !== document.body; node = node.parentElement, depth += 1) ancestors.push(node);
     const links = new Set();
     for (const node of ancestors) {
       if (node.matches('a[href]')) links.add(node);
@@ -197,20 +201,21 @@
     const dataId = ancestors.some((node) => [...node.attributes].some((attribute) => /(?:goods|product|item)[_-]?id/i.test(attribute.name) && attribute.value.trim()));
     const card = ancestors.find((node) => {
       const text = (node.innerText || node.textContent || '').trim();
-      const imageCount = node.querySelectorAll('img').length;
+      const mediaCount = node.querySelectorAll('img, video[poster]').length;
       const linkCount = node.querySelectorAll('a[href]').length;
-      return text.length >= 12 && text.length <= 900 && imageCount >= 1 && imageCount <= 5 && linkCount <= 5;
-    }) || image.parentElement;
+      return text.length >= 12 && text.length <= 900 && mediaCount >= 1 && mediaCount <= 5 && linkCount <= 5;
+    }) || productLink || media.parentElement;
     const cardText = (card?.innerText || card?.textContent || '').replace(/\s+/g, ' ').trim();
     const priceSignal = PRICE_PATTERN.test(cardText);
-    const alt = cleanTitle(image.getAttribute('alt') || image.getAttribute('title') || '');
-    const titleSignal = alt.length >= 10 || cardText.length >= 28;
+    const alt = isImage ? cleanTitle(media.getAttribute('alt') || media.getAttribute('title') || '') : '';
+    const headingText = cleanTitle(productLink?.querySelector('h1, h2, h3, [role="heading"]')?.innerText || '');
+    const titleSignal = alt.length >= 10 || headingText.length >= 10 || cardText.length >= 28;
     const interactive = [...links].length > 0 || ancestors.some((node) => node.getAttribute('role') === 'link' || node.getAttribute('role') === 'button' || getComputedStyle(node).cursor === 'pointer');
     const strongIdentity = Boolean(dataId || productLink);
     if (!strongIdentity && !(interactive && priceSignal && titleSignal)) return undefined;
 
-    const title = alt || cleanTitle(cardText).slice(0, 140) || 'Temu 商品';
-    return { image, imageUrl: parsedImage.href, title, card };
+    const title = alt || headingText || cleanTitle(cardText).slice(0, 140) || 'Temu 商品';
+    return { image: media, imageUrl: parsedImage.href, title, card };
   }
 
   function isProductLink(href) {
@@ -268,7 +273,7 @@
 
   function onPointerOver(event) {
     if (!supported || !event.target || (root && root.contains(event.target))) return;
-    if (event.target instanceof HTMLImageElement) {
+    if (event.target instanceof HTMLImageElement || event.target instanceof HTMLVideoElement) {
       clearTimeout(hideTimer);
       setActiveImage(event.target);
     }
