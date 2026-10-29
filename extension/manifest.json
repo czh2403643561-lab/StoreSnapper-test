@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "StoreSnapper · Temu 1688 找货",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "在 Temu 分类和搜索商品列表中用主图搜索 1688 相似货源。",
   "permissions": ["cookies", "scripting", "tabs"],
   "host_permissions": [

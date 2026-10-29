@@ -11,7 +11,6 @@
   let rail;
   let titleNode;
   let messageNode;
-  let disclaimerNode;
   let actionsNode;
   let cardsNode;
   let resultsCountNode;
@@ -39,7 +38,6 @@
     product: undefined,
     results: [],
     message: '',
-    disclaimer: '',
     issue: undefined,
   };
 
@@ -103,7 +101,6 @@
         .message[data-state="loading"] { color: #245c43; background: #f1f8f3; }
         .message[data-state="auth"] { color: #684c15; border-color: #f0dfb5; background: #fff9e9; }
         .message[data-state="error"] { color: #783d38; border-color: #f0d3cf; background: #fff6f5; }
-        .disclaimer { margin: 0 1px 9px; color: #7a827d; font-size: 11px; }
         .actions { display: flex; gap: 7px; margin: 0 0 10px; }
         .action {
           min-height: 32px; padding: 6px 9px; border: 1px solid #dce5de; border-radius: 7px;
@@ -112,11 +109,12 @@
         .action.primary { color: #fff; border-color: #26734f; background: #26734f; }
         .action:hover { filter: brightness(.97); }
         .count { margin: 5px 1px 8px; color: #6c7770; font-size: 11px; }
-        .diagnostics { margin: 0 0 10px; padding: 8px; border: 1px solid #e9ddd1; border-radius: 8px; background: #fffaf5; }
-        .diagnostic-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: #77522c; font-size: 11px; }
-        .diagnostics .action { min-height: 27px; padding: 4px 7px; font-size: 10px; }
-        .diagnostics details { margin-top: 7px; color: #685b4e; font-size: 10px; }
+        .diagnostics { margin: 12px 0 0; padding-top: 8px; border-top: 1px solid #eef0ee; color: #77817a; font-size: 10px; }
         .diagnostics summary { cursor: pointer; }
+        .diagnostic-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; margin-top: 7px; color: #77522c; font-size: 11px; }
+        .diagnostic-count { min-width: 0; flex: 1; line-height: 1.4; }
+        .diagnostic-copy { flex: 0 0 auto; white-space: nowrap; }
+        .diagnostics .action { min-height: 27px; padding: 4px 7px; font-size: 10px; }
         .diagnostics pre { max-height: 220px; overflow: auto; margin: 6px 0 0; color: #4d463f; font: 10px/1.4 Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
         .cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
         .card {
@@ -134,7 +132,7 @@
         .meta { display: flex; flex-direction: column; gap: 2px; color: #657068; font-size: 10px; }
         .supplier { overflow: hidden; margin-top: 6px; color: #42554a; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
         .badge { display: inline-block; max-width: 100%; overflow: hidden; margin: 5px 3px 0 0; padding: 2px 5px; border-radius: 4px; color: #486453; background: #eff5f0; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
-        .icon[hidden], .panel[hidden], .rail[hidden], .actions[hidden], .disclaimer[hidden], .count[hidden], .diagnostics[hidden] { display: none !important; }
+        .icon[hidden], .panel[hidden], .rail[hidden], .actions[hidden], .message[hidden], .count[hidden], .diagnostics[hidden] { display: none !important; }
         @media (max-width: 320px) { .panel { width: 100vw; } .cards { grid-template-columns: 1fr; } }
       </style>
       <button class="icon" type="button" aria-label="在1688按图搜索" title="在1688按图搜索">
@@ -150,14 +148,14 @@
         </div>
         <div class="scroll-area">
           <p class="message" role="status" aria-live="polite"></p>
-          <p class="disclaimer" hidden></p>
           <div class="actions" hidden></div>
           <p class="count" hidden></p>
-          <section class="diagnostics" hidden aria-label="货源图片加载诊断">
-            <div class="diagnostic-head"><span class="diagnostic-count"></span><button class="action diagnostic-copy" type="button">复制诊断信息</button></div>
-            <details><summary>查看图片失败原因</summary><pre></pre></details>
-          </section>
           <div class="cards"></div>
+          <details class="diagnostics" hidden aria-label="货源图片加载诊断">
+            <summary>查看图片诊断日志</summary>
+            <div class="diagnostic-head"><span class="diagnostic-count"></span><button class="action diagnostic-copy" type="button">复制诊断日志</button></div>
+            <pre></pre>
+          </details>
         </div>
       </aside>
       <button class="rail" type="button" aria-label="展开1688货源栏" title="展开货源栏" hidden>⌕&nbsp;1688</button>
@@ -168,7 +166,6 @@
     rail = shadow.querySelector('.rail');
     titleNode = shadow.querySelector('.product-title');
     messageNode = shadow.querySelector('.message');
-    disclaimerNode = shadow.querySelector('.disclaimer');
     actionsNode = shadow.querySelector('.actions');
     cardsNode = shadow.querySelector('.cards');
     resultsCountNode = shadow.querySelector('.count');
@@ -201,7 +198,7 @@
         diagnosticsCopyButton.textContent = '已复制';
       } catch {
         diagnosticsCopyButton.textContent = '复制受限，可展开后手动复制';
-        diagnosticsNode.querySelector('details').open = true;
+        diagnosticsNode.open = true;
       }
     });
     render();
@@ -366,7 +363,6 @@
     state.product = product;
     state.results = [];
     state.message = '正在准备商品图片…';
-    state.disclaimer = '只展示图片相似货源，不代表完全同款或库存已确认。';
     state.issue = undefined;
     currentRequestId = crypto.randomUUID();
     imageDiagnostics = [];
@@ -403,11 +399,10 @@
     rail.hidden = !state.open || !state.collapsed;
     if (!state.open || state.collapsed) return;
     titleNode.textContent = state.product?.title || 'Temu 商品';
+    messageNode.hidden = state.phase === 'ready';
     messageNode.textContent = state.message || phaseMessage(state.phase);
     messageNode.dataset.state = ['preparing', 'uploading', 'searching', 'enriching'].includes(state.phase)
       ? 'loading' : state.phase === 'needs-auth' ? 'auth' : ['failed', 'empty'].includes(state.phase) ? 'error' : 'ready';
-    disclaimerNode.hidden = !state.disclaimer;
-    disclaimerNode.textContent = state.disclaimer;
     cardsNode.replaceChildren(...state.results.map(createCard));
     resultsCountNode.hidden = !state.results.length;
     resultsCountNode.textContent = state.results.length ? `${state.results.length} 个相似货源` : '';
@@ -433,7 +428,7 @@
     if (phase === 'empty') return '1688 本次没有返回相似货源。';
     if (phase === 'needs-auth') return '请在 1688 完成登录或安全验证后重新搜索。';
     if (phase === 'failed') return '搜索失败，请重试。';
-    if (phase === 'ready') return '已显示 1688 返回的相似货源。';
+    if (phase === 'ready') return '';
     return '';
   }
 
@@ -623,7 +618,17 @@
   function renderImageDiagnostics() {
     if (!diagnosticsNode) return;
     diagnosticsNode.hidden = imageDiagnostics.length === 0;
-    diagnosticsCountNode.textContent = `货源图加载失败 ${imageDiagnostics.length} 张`;
+    const originalFailures = imageDiagnostics.filter((record) => record.pageImageLoad === 'error').length;
+    const restored = imageDiagnostics.filter((record) => record.fallback === 'canvas_rendered').length;
+    const unresolved = imageDiagnostics.filter((record) => ['unavailable', 'canvas_blocked', 'decode_failed', 'skipped'].includes(record.fallback)).length;
+    const pending = imageDiagnostics.filter((record) => ['checking', 'drawing'].includes(record.fallback)).length;
+    const counts = [
+      `原图未显示 ${originalFailures}`,
+      `插件已补画 ${restored}`,
+      `仍不可用 ${unresolved}`,
+    ];
+    if (pending) counts.push(`处理中 ${pending}`);
+    diagnosticsCountNode.textContent = counts.join(' · ');
     diagnosticsPreNode.textContent = JSON.stringify(imageDiagnostics, null, 2);
   }
 
@@ -674,7 +679,6 @@
     state.phase = message.state || 'failed';
     state.results = Array.isArray(message.results) ? message.results : [];
     state.message = message.message || phaseMessage(state.phase);
-    state.disclaimer = message.disclaimer || (state.results.length ? '相似货源仅供参考；请在 1688 核实款式、价格和库存。' : '');
     state.issue = message.issue;
     render();
   });
