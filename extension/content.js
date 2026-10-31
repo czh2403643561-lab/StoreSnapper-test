@@ -334,7 +334,10 @@
   });
 
   function safeUploadDiagnostic(value) {
-    const stages = ['token_lookup', 'token_refresh', 'image_upload', 'image_upload_retry'];
+    const stages = [
+      'token_lookup', 'token_refresh', 'token_cookie_url', 'token_cookie_domain',
+      'token_tabs_query', 'token_page_cookie', 'image_upload', 'image_upload_retry',
+    ];
     if (!value || !stages.includes(value.stage)) return undefined;
     const diagnostic = { stage: value.stage };
     if (Number.isFinite(value.duration_ms)) diagnostic.duration_ms = Math.max(0, Math.round(value.duration_ms));

@@ -50,7 +50,7 @@
       const actions = h('div', 'actions');
       if (phase === 'needs-auth') {
         actions.append(actionButton('在 1688 登录／验证', 'primary', () => sendTemuAction('login')));
-        actions.append(actionButton('已完成，重新搜索', '', () => sendTemuAction('retry')));
+        actions.append(actionButton('我已登录，重新检查', '', () => sendTemuAction('retry')));
       } else if (['failed', 'empty'].includes(phase)) {
         actions.append(actionButton('重新搜索', 'primary', () => sendTemuAction('retry')));
       } else if (!state.hasProduct) {

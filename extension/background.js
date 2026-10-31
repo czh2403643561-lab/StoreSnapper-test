@@ -18,6 +18,7 @@ const DIAGNOSTIC_IMAGE_HOSTS = new Set(['cbu01.alicdn.com']);
 const MAX_DIAGNOSTIC_IMAGE_BYTES = 256 * 1024;
 const LOGIN_URL = 'https://login.1688.com/member/signin.htm?Done=https%3A%2F%2Fwww.1688.com%2F';
 const MTOP_TOKEN_LOOKUP_TIMEOUT_MS = 10_000;
+const MTOP_TOKEN_LOOKUP_STEP_TIMEOUT_MS = 2_000;
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || typeof message.type !== 'string') return false;
@@ -285,7 +286,7 @@ async function runSearch(job) {
     assertCurrent(job);
     const updateUploadDiagnostic = (diagnostic) => {
       job.uploadDiagnostic = diagnostic;
-      const readingToken = diagnostic.stage === 'token_lookup' || diagnostic.stage === 'token_refresh';
+      const readingToken = diagnostic.stage.startsWith('token_');
       publish(job, 'uploading', {
         message: readingToken ? '正在读取 1688 登录状态…' : '正在提交图片到 1688…',
         diagnostic,
@@ -392,30 +393,62 @@ async function blobToDataUrl(blob) {
   return `data:${blob.type || 'image/jpeg'};base64,${btoa(binary)}`;
 }
 
-async function getMtopToken(signal) {
-  throwIfAborted(signal);
-  const byUrl = await chrome.cookies.getAll({ url: 'https://h5api.m.1688.com/', name: '_m_h5_tk' }).catch(() => []);
-  throwIfAborted(signal);
-  const byDomain = await chrome.cookies.getAll({ domain: '1688.com', name: '_m_h5_tk' }).catch(() => []);
-  throwIfAborted(signal);
-  const cookie = [...byUrl, ...byDomain].find((item) => item.value);
-  const fromCookieApi = tokenFromCookie(cookie?.value || '');
-  if (fromCookieApi) return fromCookieApi;
+async function getMtopToken(signal, reportDiagnostic = () => {}) {
+  const lookupStep = async (stage, operation, hasCredential = () => false) => {
+    throwIfAborted(signal);
+    const startedAt = Date.now();
+    reportDiagnostic({ stage, duration_ms: 0 });
+    try {
+      const value = await awaitPromiseWithTimeout(
+        operation,
+        MTOP_TOKEN_LOOKUP_STEP_TIMEOUT_MS,
+        signal,
+        '读取 1688 登录状态步骤超时。',
+      );
+      reportDiagnostic({ stage, duration_ms: Date.now() - startedAt, credential_found: Boolean(hasCredential(value)) });
+      return value;
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      reportDiagnostic({ stage, duration_ms: Date.now() - startedAt, credential_found: false });
+      return undefined;
+    }
+  };
+
+  const byUrl = await lookupStep(
+    'token_cookie_url',
+    () => chrome.cookies.getAll({ url: 'https://h5api.m.1688.com/', name: '_m_h5_tk' }).catch(() => []),
+    (items) => items?.some((item) => Boolean(tokenFromCookie(item.value || ''))),
+  );
+  const fromUrl = tokenFromCookie(byUrl?.find((item) => item.value)?.value || '');
+  if (fromUrl) return fromUrl;
+
+  const byDomain = await lookupStep(
+    'token_cookie_domain',
+    () => chrome.cookies.getAll({ domain: '1688.com', name: '_m_h5_tk' }).catch(() => []),
+    (items) => items?.some((item) => Boolean(tokenFromCookie(item.value || ''))),
+  );
+  const fromDomain = tokenFromCookie(byDomain?.find((item) => item.value)?.value || '');
+  if (fromDomain) return fromDomain;
 
   // Some Chrome session stores expose the signed-in page cookie to the page but
   // not to chrome.cookies.getAll(). Read only the MTop token from an open 1688
   // tab after the user explicitly starts a search; never persist or log it.
-  const tabs = await chrome.tabs.query({ url: ['https://www.1688.com/*', 'https://search.1688.com/*', 'https://air.1688.com/*'] }).catch(() => []);
-  throwIfAborted(signal);
-  for (const tab of tabs) {
+  const tabs = await lookupStep(
+    'token_tabs_query',
+    () => chrome.tabs.query({ url: ['https://www.1688.com/*', 'https://search.1688.com/*', 'https://air.1688.com/*'] }).catch(() => []),
+  );
+  for (const tab of tabs || []) {
     if (tab.id === undefined) continue;
-    const injected = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      func: () => document.cookie.split(';').map((item) => item.trim())
-        .find((item) => item.startsWith('_m_h5_tk='))?.slice('_m_h5_tk='.length) || '',
-    }).catch(() => []);
-    throwIfAborted(signal);
-    const token = tokenFromCookie(injected[0]?.result || '');
+    const injected = await lookupStep(
+      'token_page_cookie',
+      () => chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: () => document.cookie.split(';').map((item) => item.trim())
+          .find((item) => item.startsWith('_m_h5_tk='))?.slice('_m_h5_tk='.length) || '',
+      }).catch(() => []),
+      (items) => Boolean(tokenFromCookie(items?.[0]?.result || '')),
+    );
+    const token = tokenFromCookie(injected?.[0]?.result || '');
     if (token) return token;
   }
   return '';
@@ -431,18 +464,23 @@ async function uploadImage(dataUrl, signal, reportDiagnostic = () => {}) {
   const body = JSON.stringify({ imageBase64: base64, appName: 'searchImageUpload', appKey: 'pvvljh1grxcmaay2vgpe9nb68gg9ueg2' });
   const readToken = async (stage) => {
     const startedAt = Date.now();
-    reportDiagnostic({ stage, duration_ms: 0 });
+    let lastStage = stage;
+    const updateDiagnostic = (diagnostic) => {
+      if (diagnostic.stage) lastStage = diagnostic.stage;
+      reportDiagnostic(diagnostic);
+    };
+    updateDiagnostic({ stage, duration_ms: 0 });
     try {
       const token = await awaitPromiseWithTimeout(
-        (lookupSignal) => getMtopToken(lookupSignal),
+        (lookupSignal) => getMtopToken(lookupSignal, updateDiagnostic),
         MTOP_TOKEN_LOOKUP_TIMEOUT_MS,
         signal,
-        '读取 1688 登录状态超时，请确认已登录后重试。',
+        '暂时无法读取 1688 登录状态。请在 1688 页面确认登录后返回重新检查。',
       );
-      reportDiagnostic({ stage, duration_ms: Date.now() - startedAt, credential_found: Boolean(token) });
+      updateDiagnostic({ stage, duration_ms: Date.now() - startedAt, credential_found: Boolean(token) });
       return token;
     } catch (error) {
-      reportDiagnostic({ stage, duration_ms: Date.now() - startedAt, credential_found: false });
+      updateDiagnostic({ stage: lastStage, duration_ms: Date.now() - startedAt, credential_found: false });
       throw error;
     }
   };
@@ -460,7 +498,7 @@ async function uploadImage(dataUrl, signal, reportDiagnostic = () => {}) {
   };
 
   let token = await readToken('token_lookup');
-  if (!token) throw new SearchFailure('auth', '请先打开 1688 并完成登录，再重新搜索。', 'login');
+  if (!token) throw new SearchFailure('auth', '暂时未读到 1688 登录状态。请打开 1688 页面确认登录；已登录则返回此处重新检查。', 'login');
 
   let data = await sendImage('image_upload', token);
   let auth = authFromData(data);
@@ -643,7 +681,7 @@ function awaitPromiseWithTimeout(operation, timeout, parentSignal, timeoutMessag
     }
     parentSignal?.addEventListener('abort', abortFromParent, { once: true });
     timer = setTimeout(() => {
-      const failure = new SearchFailure('failed', timeoutMessage);
+      const failure = new SearchFailure('auth', timeoutMessage, 'login');
       controller.abort(failure);
       finish(reject, failure);
     }, timeout);
