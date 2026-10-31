@@ -450,23 +450,41 @@ async function getMtopToken(signal, reportDiagnostic = () => {}) {
   await lookupStep('token_bootstrap', (lookupSignal) => bootstrapMtopToken(lookupSignal), () => false, 7_500);
   const afterBootstrap = await lookupStep(
     'token_cookie_after_bootstrap',
-    () => chrome.cookies.getAll({ url: 'https://h5api.m.1688.com/', name: '_m_h5_tk' }),
+    (lookupSignal) => waitForMtopCookie(lookupSignal),
     (items) => items?.some((item) => Boolean(tokenFromCookie(item.value || ''))),
   );
   return tokenFromCookie(afterBootstrap?.find((item) => item.value)?.value || '');
+}
+
+async function waitForMtopCookie(signal) {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    throwIfAborted(signal);
+    const items = await chrome.cookies.getAll({ url: 'https://h5api.m.1688.com/', name: '_m_h5_tk' });
+    if (items.some((item) => tokenFromCookie(item.value || ''))) return items;
+    await delay(150, signal);
+  }
+  return [];
 }
 
 async function bootstrapMtopToken(signal) {
   const url = new URL('https://h5api.m.1688.com/h5/mtop.1688.imageservice.putimage/1.0/');
   for (const [key, value] of Object.entries({
     jsv: '2.7.2', appKey: '12574478', t: Date.now().toString(), sign: '0',
-    api: 'mtop.1688.imageService.putImage', v: '1.0', type: 'originaljson', dataType: 'jsonp',
+    api: 'mtop.1688.imageService.putImage', v: '1.0', type: 'originaljson', dataType: 'json', data: '{}',
   })) url.searchParams.set(key, value);
-  await requestText(url.href, {
-    method: 'POST', credentials: 'include',
-    headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: 'data=%7B%7D',
-  }, 7_000, signal, '初始化 1688 搜图凭据超时。');
+  let tab;
+  try {
+    tab = await chrome.tabs.create({ url: url.href, active: false });
+    if (tab.id === undefined) return;
+    for (let attempt = 0; attempt < 35; attempt += 1) {
+      throwIfAborted(signal);
+      const current = await chrome.tabs.get(tab.id);
+      if (current.status === 'complete') return;
+      await delay(180, signal);
+    }
+  } finally {
+    if (tab?.id !== undefined) await chrome.tabs.remove(tab.id).catch(() => undefined);
+  }
 }
 
 function tokenFromCookie(value) {

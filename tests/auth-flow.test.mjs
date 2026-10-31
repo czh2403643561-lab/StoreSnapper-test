@@ -3,16 +3,33 @@ import test from 'node:test';
 
 let onMessage;
 let cookieValue = '';
-let fetchCount = 0;
+let bootstrapCount = 0;
+let bootstrapSetsCookie = true;
+let closedTabs = [];
 let loginSteps = [];
 
 globalThis.chrome = {
   runtime: { onMessage: { addListener(listener) { onMessage = listener; } } },
   tabs: {
     onRemoved: { addListener() {} },
-    async get(tabId) { loginSteps.push(['get', tabId]); return { windowId: 9 }; },
-    async create(options) { loginSteps.push(['create', options]); return { id: 55 }; },
+    async get(tabId) {
+      if (tabId === 55) return { status: 'complete' };
+      loginSteps.push(['get', tabId]);
+      return { windowId: 9 };
+    },
+    async create(options) {
+      if (new URL(options.url).hostname === 'h5api.m.1688.com') {
+        bootstrapCount += 1;
+        assert.equal(new URL(options.url).searchParams.get('sign'), '0');
+        assert.equal(options.active, false);
+        if (bootstrapSetsCookie) cookieValue = 'bootstrapped_token';
+        return { id: 55 };
+      }
+      loginSteps.push(['create', options]);
+      return { id: 55 };
+    },
     async update(tabId, options) { loginSteps.push(['update', tabId, options]); },
+    async remove(tabId) { closedTabs.push(tabId); },
   },
   cookies: {
     async getAll() { return cookieValue ? [{ value: cookieValue }] : []; },
@@ -22,17 +39,6 @@ globalThis.chrome = {
       async set(value) { loginSteps.push(['set', value]); },
     },
   },
-};
-
-globalThis.fetch = async (url, options) => {
-  fetchCount += 1;
-  const requestUrl = new URL(url);
-  assert.equal(requestUrl.hostname, 'h5api.m.1688.com');
-  assert.equal(requestUrl.searchParams.get('sign'), '0');
-  assert.equal(options.credentials, 'include');
-  assert.equal(options.body, 'data=%7B%7D');
-  if (fetchCount === 1) cookieValue = 'bootstrapped_token';
-  return new Response('{"ret":["FAIL_SYS_TOKEN_EMPTY"]}', { status: 200 });
 };
 
 await import('../extension/background.js');
@@ -45,23 +51,29 @@ function send(message, sender = {}) {
 
 test('missing MTop cookie is initialized before reporting ready', async () => {
   cookieValue = '';
-  fetchCount = 0;
+  bootstrapCount = 0;
+  bootstrapSetsCookie = true;
+  closedTabs = [];
   assert.deepEqual(await send({ type: 'CHECK_1688_TOKEN' }), { ok: true });
-  assert.equal(fetchCount, 1);
+  assert.equal(bootstrapCount, 1);
+  assert.deepEqual(closedTabs, [55]);
 });
 
 test('existing MTop cookie skips initialization', async () => {
   cookieValue = 'existing_token';
-  fetchCount = 0;
+  bootstrapCount = 0;
   assert.deepEqual(await send({ type: 'CHECK_1688_TOKEN' }), { ok: true });
-  assert.equal(fetchCount, 0);
+  assert.equal(bootstrapCount, 0);
 });
 
 test('missing cookie after initialization does not report ready', async () => {
   cookieValue = '';
-  fetchCount = 1;
+  bootstrapCount = 0;
+  bootstrapSetsCookie = false;
+  closedTabs = [];
   assert.deepEqual(await send({ type: 'CHECK_1688_TOKEN' }), { ok: false });
-  assert.equal(fetchCount, 2);
+  assert.equal(bootstrapCount, 1);
+  assert.deepEqual(closedTabs, [55]);
 });
 
 test('login page opens in the Temu window after return context is saved', async () => {
