@@ -6,6 +6,9 @@
   let refreshTimer = 0;
   let latestState = null;
   let tiktokLogsOpen = false;
+  let authReady = false;
+  let authChecking = false;
+  let authFlow = null;
   const imageDiagnoses = new Set();
   const imageRecovery = new Map();
 
@@ -79,6 +82,61 @@
     if (!activeTabId) return;
     try { await chrome.tabs.sendMessage(activeTabId, { type: 'TEMU_PANEL_ACTION', action }); }
     catch { renderUnsupported('页面脚本暂不可用，请刷新 Temu 页面后重试。'); }
+  }
+
+  function show1688Auth(message, checking = false) {
+    activeMode = '1688-auth';
+    document.body.classList.remove('collector-mode');
+    contextLabel.textContent = '1688 验证';
+    content.replaceChildren();
+    const header = h('section', 'feature-head');
+    header.append(h('h1', '', '1688 搜图准备'));
+    content.append(header);
+    const status = h('div', 'status', message);
+    status.dataset.kind = authReady ? 'ready' : checking ? 'uploading' : 'needs-auth';
+    content.append(status);
+    const actions = h('div', 'actions');
+    if (!authReady) {
+      const retry = actionButton('重新检查搜图凭据', '', () => void check1688Auth());
+      retry.disabled = checking;
+      actions.append(retry);
+    }
+    actions.append(actionButton(authReady ? '返回 Temu，继续搜图' : '返回 Temu', authReady ? 'primary' : '', () => void returnToTemu()));
+    content.append(actions);
+  }
+
+  async function check1688Auth() {
+    if (authChecking || !authFlow || activeTabId !== authFlow.authTabId || authReady) return;
+    const tabId = activeTabId;
+    const tab = await chrome.tabs.get(tabId).catch(() => null);
+    if (!tab || activeTabId !== tabId) return;
+    if (/^https:\/\/login\.1688\.com\//.test(tab.url || '')) {
+      show1688Auth('请在此页完成登录。进入 1688 首页后会自动检查搜图凭据。');
+      return;
+    }
+    authChecking = true;
+    show1688Auth('正在检查 1688 搜图凭据…', true);
+    try {
+      const response = await chrome.runtime.sendMessage({ type: 'CHECK_1688_TOKEN' });
+      if (activeTabId !== tabId || activeMode !== '1688-auth') return;
+      authReady = response?.ok === true;
+      show1688Auth(authReady
+        ? '已取得 1688 搜图凭据，可以返回 Temu 点击放大镜。'
+        : '暂未取得搜图凭据。请确认此浏览器中的 1688 页面可正常使用，再点“重新检查”。');
+    } catch {
+      if (activeTabId === tabId && activeMode === '1688-auth') show1688Auth('检查暂时失败，请稍后重试。');
+    } finally { authChecking = false; }
+  }
+
+  async function returnToTemu() {
+    const flow = authFlow;
+    if (!flow || activeTabId !== flow.authTabId) return;
+    try {
+      if (authReady) await chrome.tabs.sendMessage(flow.originTabId, { type: 'TEMU_PANEL_ACTION', action: 'auth_ready' }).catch(() => undefined);
+      await chrome.tabs.update(flow.originTabId, { active: true });
+      await chrome.storage.session.remove('storesnapper_1688_auth_flow');
+      authFlow = null;
+    } catch { show1688Auth('原 Temu 页面已关闭，请手动打开 Temu 商品列表。'); }
   }
 
   function makeOfferCard(item) {
@@ -241,6 +299,18 @@
           || hasItemId;
         if (!detail) mode = 'temu';
       } else if (url?.hostname === 'seller.eu.tiktokshopglobalselling.com' && /^\/product\/manage\/?$/.test(url.pathname)) mode = 'tiktok';
+      else if (['login.1688.com', 'www.1688.com', 'search.1688.com', 'air.1688.com'].includes(url?.hostname)) {
+        const stored = await chrome.storage.session.get('storesnapper_1688_auth_flow');
+        if (tab?.id !== activeTabId) return;
+        const flow = stored.storesnapper_1688_auth_flow;
+        if (flow?.authTabId === tab?.id) {
+          authFlow = flow;
+          authReady = false;
+          show1688Auth('正在检查 1688 搜图凭据…', true);
+          void check1688Auth();
+          return;
+        }
+      }
       if (!mode || !tab?.id) { activeMode = null; contextLabel.textContent = '识别当前页面'; renderUnsupported(); return; }
       try {
         const response = await chrome.tabs.sendMessage(tab.id, { type: 'STORESNAPPER_GET_PANEL_STATE', mode });
@@ -269,5 +339,8 @@
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area === 'local' && changes.storesnapper_settings_v1 && latestState && activeMode === 'temu') void showTemu(latestState);
   });
+  setInterval(() => {
+    if (activeMode === '1688-auth' && !authReady) void check1688Auth();
+  }, 5_000);
   void refresh();
 })();

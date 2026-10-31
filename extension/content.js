@@ -291,7 +291,8 @@
 
   async function openLogin() {
     try {
-      await chrome.runtime.sendMessage({ type: 'OPEN_1688_LOGIN' });
+      const response = await chrome.runtime.sendMessage({ type: 'OPEN_1688_LOGIN' });
+      if (!response?.ok) throw new Error(response?.error || '无法打开 1688 登录页。');
     } catch {
       state.message = '无法打开 1688 登录页，请手动打开 1688 后重试。';
       render();
@@ -321,6 +322,14 @@
     if (message?.type === 'TEMU_PANEL_ACTION' && supported) {
       if (message.action === 'retry') void retrySearch().then(() => sendResponse({ ok: true }));
       else if (message.action === 'login') void openLogin().then(() => sendResponse({ ok: true }));
+      else if (message.action === 'auth_ready') {
+        state.phase = 'idle';
+        state.message = '已取得 1688 搜图凭据，请在商品主图上点击放大镜重新搜索。';
+        state.diagnostic = undefined;
+        render();
+        sendResponse({ ok: true });
+        return false;
+      }
       else sendResponse({ ok: false });
       return true;
     }
@@ -336,7 +345,8 @@
   function safeUploadDiagnostic(value) {
     const stages = [
       'token_lookup', 'token_refresh', 'token_cookie_url', 'token_cookie_domain',
-      'token_tabs_query', 'token_page_cookie', 'image_upload', 'image_upload_retry',
+      'token_tabs_query', 'token_page_cookie', 'token_bootstrap', 'token_cookie_after_bootstrap',
+      'image_upload', 'image_upload_retry',
     ];
     if (!value || !stages.includes(value.stage)) return undefined;
     const diagnostic = { stage: value.stage };

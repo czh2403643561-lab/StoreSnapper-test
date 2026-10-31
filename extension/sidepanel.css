@@ -14,6 +14,7 @@ main{padding:12px}
 .feature-head p{overflow:hidden;margin:3px 0 0;color:#687873;text-overflow:ellipsis;white-space:nowrap}
 .status{margin:0 0 9px;padding:9px 10px;border:1px solid #e1ebe7;border-radius:10px;background:#fff;color:#44544d;font-weight:600}
 .status[data-kind="preparing"],.status[data-kind="uploading"],.status[data-kind="searching"],.status[data-kind="enriching"]{color:#245c43;background:#f1f8f3}
+.status[data-kind="ready"]{color:#175b53;border-color:#b8d9c8;background:#edf8f1}
 .status[data-kind="needs-auth"]{color:#684c15;border-color:#f0dfb5;background:#fff9e9}
 .status[data-kind="failed"],.status[data-kind="empty"]{color:#783d38;border-color:#f0d3cf;background:#fff6f5}
 .actions{display:flex;flex-wrap:wrap;gap:7px;margin:0 0 10px}

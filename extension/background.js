@@ -19,6 +19,7 @@ const MAX_DIAGNOSTIC_IMAGE_BYTES = 256 * 1024;
 const LOGIN_URL = 'https://login.1688.com/member/signin.htm?Done=https%3A%2F%2Fwww.1688.com%2F';
 const MTOP_TOKEN_LOOKUP_TIMEOUT_MS = 10_000;
 const MTOP_TOKEN_LOOKUP_STEP_TIMEOUT_MS = 2_000;
+const AUTH_FLOW_KEY = 'storesnapper_1688_auth_flow';
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || typeof message.type !== 'string') return false;
@@ -58,7 +59,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return false;
   }
   if (message.type === 'OPEN_1688_LOGIN') {
-    void chrome.tabs.create({ url: LOGIN_URL, active: true }).then(() => sendResponse({ ok: true })).catch(() => sendResponse({ ok: false, error: '无法打开 1688 登录页。' }));
+    void open1688Login(sender.tab?.id)
+      .then(() => sendResponse({ ok: true }))
+      .catch(() => sendResponse({ ok: false, error: '无法打开 1688 登录页。' }));
+    return true;
+  }
+  if (message.type === 'CHECK_1688_TOKEN') {
+    void getMtopToken(undefined, () => {})
+      .then((token) => sendResponse({ ok: Boolean(token) }))
+      .catch(() => sendResponse({ ok: false }));
     return true;
   }
   if (message.type === 'OPEN_1688_OFFER') {
@@ -74,6 +83,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   return false;
 });
+
+async function open1688Login(originTabId) {
+  if (originTabId === undefined) throw new Error('Missing Temu tab');
+  const originTab = await chrome.tabs.get(originTabId);
+  const tab = await chrome.tabs.create({ windowId: originTab.windowId, url: LOGIN_URL, active: false });
+  if (tab.id === undefined) throw new Error('Missing 1688 tab');
+  await chrome.storage.session.set({ [AUTH_FLOW_KEY]: { originTabId, authTabId: tab.id } });
+  await chrome.tabs.update(tab.id, { active: true });
+}
 
 async function diagnose1688Image(imageUrl) {
   let url;
@@ -288,7 +306,7 @@ async function runSearch(job) {
       job.uploadDiagnostic = diagnostic;
       const readingToken = diagnostic.stage.startsWith('token_');
       publish(job, 'uploading', {
-        message: readingToken ? '正在读取 1688 登录状态…' : '正在提交图片到 1688…',
+        message: readingToken ? '正在准备 1688 搜图凭据…' : '正在提交图片到 1688…',
         diagnostic,
       });
     };
@@ -394,16 +412,16 @@ async function blobToDataUrl(blob) {
 }
 
 async function getMtopToken(signal, reportDiagnostic = () => {}) {
-  const lookupStep = async (stage, operation, hasCredential = () => false) => {
+  const lookupStep = async (stage, operation, hasCredential = () => false, timeout = MTOP_TOKEN_LOOKUP_STEP_TIMEOUT_MS) => {
     throwIfAborted(signal);
     const startedAt = Date.now();
     reportDiagnostic({ stage, duration_ms: 0 });
     try {
       const value = await awaitPromiseWithTimeout(
         operation,
-        MTOP_TOKEN_LOOKUP_STEP_TIMEOUT_MS,
+        timeout,
         signal,
-        '读取 1688 登录状态步骤超时。',
+        '读取 1688 搜图凭据步骤超时。',
       );
       reportDiagnostic({ stage, duration_ms: Date.now() - startedAt, credential_found: Boolean(hasCredential(value)) });
       return value;
@@ -429,29 +447,26 @@ async function getMtopToken(signal, reportDiagnostic = () => {}) {
   );
   const fromDomain = tokenFromCookie(byDomain?.find((item) => item.value)?.value || '');
   if (fromDomain) return fromDomain;
-
-  // Some Chrome session stores expose the signed-in page cookie to the page but
-  // not to chrome.cookies.getAll(). Read only the MTop token from an open 1688
-  // tab after the user explicitly starts a search; never persist or log it.
-  const tabs = await lookupStep(
-    'token_tabs_query',
-    () => chrome.tabs.query({ url: ['https://www.1688.com/*', 'https://search.1688.com/*', 'https://air.1688.com/*'] }).catch(() => []),
+  await lookupStep('token_bootstrap', (lookupSignal) => bootstrapMtopToken(lookupSignal), () => false, 7_500);
+  const afterBootstrap = await lookupStep(
+    'token_cookie_after_bootstrap',
+    () => chrome.cookies.getAll({ url: 'https://h5api.m.1688.com/', name: '_m_h5_tk' }),
+    (items) => items?.some((item) => Boolean(tokenFromCookie(item.value || ''))),
   );
-  for (const tab of tabs || []) {
-    if (tab.id === undefined) continue;
-    const injected = await lookupStep(
-      'token_page_cookie',
-      () => chrome.scripting.executeScript({
-        target: { tabId: tab.id },
-        func: () => document.cookie.split(';').map((item) => item.trim())
-          .find((item) => item.startsWith('_m_h5_tk='))?.slice('_m_h5_tk='.length) || '',
-      }).catch(() => []),
-      (items) => Boolean(tokenFromCookie(items?.[0]?.result || '')),
-    );
-    const token = tokenFromCookie(injected?.[0]?.result || '');
-    if (token) return token;
-  }
-  return '';
+  return tokenFromCookie(afterBootstrap?.find((item) => item.value)?.value || '');
+}
+
+async function bootstrapMtopToken(signal) {
+  const url = new URL('https://h5api.m.1688.com/h5/mtop.1688.imageservice.putimage/1.0/');
+  for (const [key, value] of Object.entries({
+    jsv: '2.7.2', appKey: '12574478', t: Date.now().toString(), sign: '0',
+    api: 'mtop.1688.imageService.putImage', v: '1.0', type: 'originaljson', dataType: 'jsonp',
+  })) url.searchParams.set(key, value);
+  await requestText(url.href, {
+    method: 'POST', credentials: 'include',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: 'data=%7B%7D',
+  }, 7_000, signal, '初始化 1688 搜图凭据超时。');
 }
 
 function tokenFromCookie(value) {
@@ -475,7 +490,7 @@ async function uploadImage(dataUrl, signal, reportDiagnostic = () => {}) {
         (lookupSignal) => getMtopToken(lookupSignal, updateDiagnostic),
         MTOP_TOKEN_LOOKUP_TIMEOUT_MS,
         signal,
-        '暂时无法读取 1688 登录状态。请在 1688 页面确认登录后返回重新检查。',
+        '暂时无法取得 1688 搜图凭据。请在 1688 页面确认登录后返回重新检查。',
       );
       updateDiagnostic({ stage, duration_ms: Date.now() - startedAt, credential_found: Boolean(token) });
       return token;
@@ -498,7 +513,7 @@ async function uploadImage(dataUrl, signal, reportDiagnostic = () => {}) {
   };
 
   let token = await readToken('token_lookup');
-  if (!token) throw new SearchFailure('auth', '暂时未读到 1688 登录状态。请打开 1688 页面确认登录；已登录则返回此处重新检查。', 'login');
+  if (!token) throw new SearchFailure('auth', '暂时未取得 1688 搜图凭据。请打开 1688 页面确认登录；已登录则返回此处重新检查。', 'login');
 
   let data = await sendImage('image_upload', token);
   let auth = authFromData(data);
