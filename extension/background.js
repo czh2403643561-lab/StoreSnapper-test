@@ -516,22 +516,18 @@ async function uploadImage(dataUrl, signal, reportDiagnostic = () => {}) {
   if (!token) {
     const startedAt = Date.now();
     let cookieChanged = false;
-    let outcome = 'completed';
     const onCookieChanged = (change) => {
       if (!change.removed && change.cookie?.name === '_m_h5_tk' && /(^|\.)1688\.com$/i.test(change.cookie.domain || '')) cookieChanged = true;
     };
-    reportDiagnostic({ stage: 'image_upload_bootstrap', duration_ms: 0 });
+    reportDiagnostic({ stage: 'token_first_party_bootstrap', duration_ms: 0 });
     chrome.cookies.onChanged.addListener(onCookieChanged);
+    let outcome = 'request_failed';
     try {
-      try { await uploadRequest(body, '', signal); }
-      catch (error) {
-        if (signal.aborted) throw error;
-        outcome = error?.name === 'AbortError' || /超时/.test(error?.message || '') ? 'timeout' : 'error';
-      }
-      token = await readToken('token_after_bootstrap');
+      outcome = await bootstrapTokenFrom1688Page(body, signal);
+      if (outcome === 'sent') token = await readToken('token_after_bootstrap');
     } finally {
       chrome.cookies.onChanged.removeListener(onCookieChanged);
-      reportDiagnostic({ stage: 'image_upload_bootstrap', duration_ms: Date.now() - startedAt, cookie_changed: cookieChanged, credential_found: Boolean(token), outcome });
+      reportDiagnostic({ stage: 'token_first_party_bootstrap', duration_ms: Date.now() - startedAt, cookie_changed: cookieChanged, credential_found: Boolean(token), outcome });
     }
   }
   if (!token) throw new SearchFailure('auth', '暂时未取得 1688 搜图凭据。请打开 1688 页面确认登录；已登录则返回此处重新检查。', 'login');
@@ -547,6 +543,45 @@ async function uploadImage(dataUrl, signal, reportDiagnostic = () => {}) {
   }
   if (auth) throw auth;
   return parseImageSessionResponse(data);
+}
+
+async function bootstrapTokenFrom1688Page(body, signal) {
+  throwIfAborted(signal);
+  const tabs = await chrome.tabs.query({ url: ['https://*.1688.com/*'] }).catch(() => []);
+  const tab = tabs.find((item) => item.id !== undefined && item.status === 'complete' && /^https:\/\/(?:www|search|air|detail)\.1688\.com\//i.test(item.url || ''));
+  if (!tab) return 'no_page';
+  const time = Date.now().toString();
+  const url = new URL('https://h5api.m.1688.com/h5/mtop.1688.imageservice.putimage/1.0/');
+  for (const [key, value] of Object.entries({
+    jsv: '2.7.2', appKey: '12574478', t: time, sign: '',
+    api: 'mtop.1688.imageService.putImage', ecode: '0', v: '1.0', type: 'originaljson', dataType: 'jsonp',
+  })) url.searchParams.set(key, value);
+  try {
+    const results = await awaitPromiseWithTimeout(
+      () => chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        world: 'ISOLATED',
+        func: async (requestUrl, requestBody) => {
+          try {
+            await fetch(requestUrl, {
+              method: 'POST', mode: 'no-cors', credentials: 'include',
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+              body: `data=${encodeURIComponent(requestBody)}`,
+            });
+            return 'sent';
+          } catch { return 'request_failed'; }
+        },
+        args: [url.href, body],
+      }),
+      8_000,
+      signal,
+      '1688 页面请求超时。',
+    );
+    return results[0]?.result === 'sent' ? 'sent' : 'request_failed';
+  } catch (error) {
+    if (signal.aborted) throw error;
+    return /超时/.test(error?.message || '') ? 'timeout' : 'request_failed';
+  }
 }
 
 async function uploadRequest(body, token, signal) {

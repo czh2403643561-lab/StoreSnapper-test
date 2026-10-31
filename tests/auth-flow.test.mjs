@@ -4,7 +4,8 @@ import test from 'node:test';
 let onMessage;
 let cookieValue = '';
 let cookieListener;
-let bootstrapSetsCookie = true;
+let firstPartyPageAvailable = false;
+let firstPartySetsCookie = false;
 let requests = [];
 let loginSteps = [];
 
@@ -12,9 +13,32 @@ globalThis.chrome = {
   runtime: { onMessage: { addListener(listener) { onMessage = listener; } } },
   tabs: {
     onRemoved: { addListener() {} },
+    async query() { return firstPartyPageAvailable ? [{ id: 88, status: 'complete', url: 'https://www.1688.com/' }] : []; },
     async get(tabId) { loginSteps.push(['get', tabId]); return { windowId: 9 }; },
     async create(options) { loginSteps.push(['create', options]); return { id: 55 }; },
     async update(tabId, options) { loginSteps.push(['update', tabId, options]); },
+  },
+  scripting: {
+    async executeScript(options) {
+      assert.equal(options.target.tabId, 88);
+      assert.equal(options.world, 'ISOLATED');
+      assert.match(options.args[1], /imageBase64/);
+      const extensionFetch = globalThis.fetch;
+      globalThis.fetch = async (url, request) => {
+        assert.equal(new URL(url).searchParams.get('sign'), '');
+        assert.equal(request.mode, 'no-cors');
+        assert.equal(request.credentials, 'include');
+        assert.match(decodeURIComponent(request.body), /imageBase64/);
+        return { type: 'opaque' };
+      };
+      try { assert.equal(await options.func(...options.args), 'sent'); }
+      finally { globalThis.fetch = extensionFetch; }
+      if (firstPartySetsCookie) {
+        cookieValue = 'page_token';
+        cookieListener?.({ removed: false, cookie: { name: '_m_h5_tk', domain: '.1688.com' } });
+      }
+      return [{ result: 'sent' }];
+    },
   },
   cookies: {
     async getAll() { return cookieValue ? [{ value: cookieValue }] : []; },
@@ -33,13 +57,7 @@ globalThis.fetch = async (url, options) => {
   assert.equal(requestUrl.hostname, 'h5api.m.1688.com');
   assert.equal(options.credentials, 'include');
   assert.match(options.body, /^data=/);
-  if (!sign) {
-    if (bootstrapSetsCookie) {
-      cookieValue = 'fresh_token';
-      cookieListener?.({ removed: false, cookie: { name: '_m_h5_tk', domain: '.1688.com' } });
-    }
-    return new Response('{"ret":["FAIL_SYS_TOKEN_EMPTY"]}', { status: 200 });
-  }
+  assert.ok(sign);
   return new Response('{"data":{"imageId":"123456789"}}', { status: 200 });
 };
 
@@ -52,18 +70,17 @@ function send(message, sender = {}) {
   });
 }
 
-test('missing token uses the former real-image unsigned request before signed upload', async () => {
+test('missing token initializes from an existing 1688 page before signed upload', async () => {
   cookieValue = '';
-  bootstrapSetsCookie = true;
+  firstPartyPageAvailable = true;
+  firstPartySetsCookie = true;
   requests = [];
   const diagnostics = [];
   const session = await uploadImage(image, new AbortController().signal, (item) => diagnostics.push(item));
   assert.equal(session.image_id, '123456789');
-  assert.equal(requests.length, 2);
-  assert.equal(requests[0].sign, '');
-  assert.ok(requests[1].sign);
-  assert.match(decodeURIComponent(requests[0].body), /imageBase64/);
-  assert.ok(diagnostics.some((item) => item.stage === 'image_upload_bootstrap' && item.cookie_changed === true && item.credential_found === true));
+  assert.equal(requests.length, 1);
+  assert.ok(requests[0].sign);
+  assert.ok(diagnostics.some((item) => item.stage === 'token_first_party_bootstrap' && item.cookie_changed === true && item.credential_found === true));
 });
 
 test('existing token skips unsigned initialization', async () => {
@@ -75,15 +92,26 @@ test('existing token skips unsigned initialization', async () => {
   assert.ok(requests[0].sign);
 });
 
-test('no cookie after unsigned request reports auth failure without signed upload', async () => {
+test('no 1688 page reports auth failure without signed upload', async () => {
   cookieValue = '';
-  bootstrapSetsCookie = false;
+  firstPartyPageAvailable = false;
+  firstPartySetsCookie = false;
   requests = [];
   const diagnostics = [];
   await assert.rejects(uploadImage(image, new AbortController().signal, (item) => diagnostics.push(item)), (error) => error.code === 'auth');
-  assert.equal(requests.length, 1);
-  assert.equal(requests[0].sign, '');
-  assert.ok(diagnostics.some((item) => item.stage === 'image_upload_bootstrap' && item.cookie_changed === false && item.credential_found === false));
+  assert.equal(requests.length, 0);
+  assert.ok(diagnostics.some((item) => item.stage === 'token_first_party_bootstrap' && item.outcome === 'no_page' && item.credential_found === false));
+});
+
+test('1688 page request without a new cookie remains an auth failure', async () => {
+  cookieValue = '';
+  firstPartyPageAvailable = true;
+  firstPartySetsCookie = false;
+  requests = [];
+  const diagnostics = [];
+  await assert.rejects(uploadImage(image, new AbortController().signal, (item) => diagnostics.push(item)), (error) => error.code === 'auth');
+  assert.equal(requests.length, 0);
+  assert.ok(diagnostics.some((item) => item.stage === 'token_first_party_bootstrap' && item.outcome === 'sent' && item.credential_found === false));
 });
 
 test('status check does not misreport a missing token as ready', async () => {

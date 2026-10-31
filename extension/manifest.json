@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "StoreSnapper · 电商工作台",
-  "version": "0.4.7",
+  "version": "0.4.8",
   "description": "Temu 图片找货与 TikTok Shop 商品管理采集。",
   "icons": {
     "16": "assets/storesnapper-16.png",
