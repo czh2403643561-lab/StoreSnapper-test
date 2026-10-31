@@ -13,7 +13,7 @@ import {
 } from './core.mjs';
 
 const jobsByTab = new Map();
-const IMAGE_HOSTS = new Set(['img.kwcdn.com', 'img-eu.kwcdn.com', 'aimg.kwcdn.com']);
+const IMAGE_HOSTS = new Set(['img.kwcdn.com', 'img-eu.kwcdn.com', 'aimg.kwcdn.com', 'cbu01.alicdn.com']);
 const DIAGNOSTIC_IMAGE_HOSTS = new Set(['cbu01.alicdn.com']);
 const MAX_DIAGNOSTIC_IMAGE_BYTES = 256 * 1024;
 const LOGIN_URL = 'https://login.1688.com/member/signin.htm?Done=https%3A%2F%2Fwww.1688.com%2F';
@@ -448,6 +448,31 @@ async function getMtopToken(signal, reportDiagnostic = () => {}, waitAfterBootst
   );
   const fromDomain = tokenFromCookie(byDomain?.find((item) => item.value)?.value || '');
   if (fromDomain) return fromDomain;
+  // Keep the original fallback: this Chrome session exposes the token to 1688's
+  // page while chrome.cookies.getAll() returns no matching cookie.
+  const fromPage = await lookupStep(
+    'token_page_cookie',
+    async () => {
+      const tabs = await chrome.tabs.query({ url: [
+        'https://www.1688.com/*', 'https://search.1688.com/*',
+        'https://air.1688.com/*', 'https://detail.1688.com/*',
+      ] });
+      for (const tab of tabs) {
+        if (tab.id === undefined) continue;
+        const injected = await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          world: 'ISOLATED',
+          func: () => document.cookie.split(';').map((item) => item.trim())
+            .find((item) => item.startsWith('_m_h5_tk='))?.slice('_m_h5_tk='.length) || '',
+        }).catch(() => []);
+        const token = tokenFromCookie(injected[0]?.result || '');
+        if (token) return token;
+      }
+      return '';
+    },
+    Boolean,
+  );
+  if (fromPage) return fromPage;
   if (waitAfterBootstrap) {
     const afterBootstrap = await lookupStep(
       'token_cookie_after_bootstrap',

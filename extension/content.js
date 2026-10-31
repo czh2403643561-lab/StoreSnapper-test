@@ -1,5 +1,5 @@
 (() => {
-  const IMAGE_HOSTS = new Set(['img.kwcdn.com', 'img-eu.kwcdn.com', 'aimg.kwcdn.com']);
+  const IMAGE_HOSTS = new Set(['img.kwcdn.com', 'img-eu.kwcdn.com', 'aimg.kwcdn.com', 'cbu01.alicdn.com']);
   const PRICE_PATTERN = /(?:£|\$|€|¥|￥)\s*\d[\d,.]*/;
   let routeUrl = location.href;
   let root;
@@ -27,9 +27,14 @@
     return hostname === 'www.temu.com';
   }
 
+  function is1688Source() {
+    return ['www.1688.com', 'search.1688.com', 'air.1688.com'].includes(location.hostname);
+  }
+
   function isSupportedListing() {
     // Website recognition is intentionally independent of URL layout. Product cards
     // are checked separately so home, channel, category and search feeds can vary.
+    if (is1688Source()) return true;
     return isTemuHost() && !isProductLink(location.href)
       && !/\/(?:login|register|signup|account|checkout)(?:\.html|\/|$)/i.test(location.pathname);
   }
@@ -37,7 +42,7 @@
   function ensureUi() {
     if (root) return;
     root = document.createElement('div');
-    root.id = 'storesnapper-temu-sourcing-root';
+    root.id = 'storesnapper-sourcing-root';
     root.style.cssText = 'position:fixed;inset:0;z-index:2147483647;pointer-events:none;';
     shadow = root.attachShadow({ mode: 'open' });
     shadow.innerHTML = '<style>:host{all:initial}.icon{position:fixed;display:none;place-items:center;width:30px;height:30px;padding:0;border:1px solid rgba(20,54,44,.16);border-radius:50%;color:#174d3c;background:rgba(255,255,255,.97);box-shadow:0 2px 8px rgba(0,0,0,.2);cursor:pointer;pointer-events:auto;transition:transform .12s ease}.icon:hover,.icon:focus-visible{transform:scale(1.08);outline:2px solid #1e7658;outline-offset:1px}.icon svg{width:16px;height:16px}</style><button class="icon" type="button" aria-label="在1688按图搜索" title="在1688按图搜索"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"><circle cx="10.8" cy="10.8" r="6.4"></circle><path d="m15.6 15.6 4.4 4.4"></path></svg></button>';
@@ -72,6 +77,11 @@
     let parsedImage;
     try { parsedImage = new URL(imageUrl, location.href); } catch { return undefined; }
     if (parsedImage.protocol !== 'https:' || !IMAGE_HOSTS.has(parsedImage.hostname)) return undefined;
+    if (is1688Source()) {
+      if (parsedImage.hostname !== 'cbu01.alicdn.com') return undefined;
+      const title = cleanTitle(media.getAttribute('alt') || media.getAttribute('title') || '') || '1688 商品图片';
+      return { image: media, imageUrl: parsedImage.href, title, card: media.parentElement };
+    }
 
     const ancestors = [];
     for (let node = media.parentElement, depth = 0; node && depth < 7 && node !== document.body; node = node.parentElement, depth += 1) ancestors.push(node);
@@ -251,7 +261,7 @@
       lastDiagnosticState = diagnosticState;
       const phase = state.phase;
       const resultCount = state.results.length;
-      const record = { at: new Date().toISOString(), type: 'temu_search', phase, resultCount };
+      const record = { at: new Date().toISOString(), type: is1688Source() ? '1688_search' : 'temu_search', phase, resultCount };
       if (diagnostic) {
         record.upload_stage = diagnostic.stage;
         if (Number.isFinite(diagnostic.duration_ms)) record.elapsed_ms = diagnostic.duration_ms;
@@ -266,11 +276,12 @@
         await chrome.storage.local.set({ storesnapper_diagnostics_v1: records.slice(-100) });
       }).catch(() => undefined);
     }
-    void chrome.runtime.sendMessage({ type: 'STOREPANEL_STATE', mode: 'temu', state: {
+    const mode = is1688Source() ? '1688' : 'temu';
+    void chrome.runtime.sendMessage({ type: 'STOREPANEL_STATE', mode, state: {
       recognized: true,
       phase: state.phase,
       title: state.product?.title || '',
-      message: state.message || phaseMessage(state.phase) || '悬停 Temu 商品主图，点击放大镜开始搜图。',
+      message: state.message || phaseMessage(state.phase) || `悬停${is1688Source() ? '1688' : 'Temu'}商品主图，点击放大镜开始搜图。`,
       count: state.results.length,
       results: state.results,
       hasProduct: Boolean(state.product),
@@ -312,11 +323,11 @@
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message?.type === 'STORESNAPPER_GET_PANEL_STATE' && supported) {
-      sendResponse({ ok: true, mode: 'temu', state: {
+      sendResponse({ ok: true, mode: is1688Source() ? '1688' : 'temu', state: {
         recognized: true,
         phase: state.phase,
         title: state.product?.title || '',
-        message: state.message || phaseMessage(state.phase) || '悬停 Temu 商品主图，点击放大镜开始搜图。',
+        message: state.message || phaseMessage(state.phase) || `悬停${is1688Source() ? '1688' : 'Temu'}商品主图，点击放大镜开始搜图。`,
         count: state.results.length,
         results: state.results,
         hasProduct: Boolean(state.product),
@@ -348,7 +359,7 @@
 
   function safeUploadDiagnostic(value) {
     const stages = [
-      'token_lookup', 'token_refresh', 'token_after_bootstrap', 'token_cookie_url', 'token_cookie_domain',
+      'token_lookup', 'token_refresh', 'token_after_bootstrap', 'token_cookie_url', 'token_cookie_domain', 'token_page_cookie',
       'token_cookie_after_bootstrap', 'image_upload_bootstrap', 'token_first_party_bootstrap', 'image_upload', 'image_upload_retry',
     ];
     if (!value || !stages.includes(value.stage)) return undefined;

@@ -30,10 +30,10 @@
     return { compactResults: stored.storesnapper_settings_v1?.compactResults !== false };
   }
 
-  async function showTemu(state) {
-    activeMode = 'temu';
+  async function showTemu(state, mode = 'temu') {
+    activeMode = mode;
     document.body.classList.remove('collector-mode');
-    contextLabel.textContent = 'Temu 找货';
+    contextLabel.textContent = mode === '1688' ? '1688 找货测试' : 'Temu 找货';
     document.body.classList.toggle('compact', (await settings()).compactResults);
     content.replaceChildren();
     const header = h('section', 'feature-head');
@@ -310,6 +310,7 @@
           void check1688Auth();
           return;
         }
+        if (url.hostname !== 'login.1688.com') mode = '1688';
       }
       if (!mode || !tab?.id) { activeMode = null; contextLabel.textContent = '识别当前页面'; renderUnsupported(); return; }
       try {
@@ -317,7 +318,7 @@
         if (tab.id !== activeTabId) return;
         if (!response?.ok || !response.state?.recognized) { activeMode = null; contextLabel.textContent = '页面尚未就绪'; renderUnsupported('刷新目标页面后再打开工具栏菜单。'); return; }
         latestState = response.state;
-        if (mode === 'temu') await showTemu(response.state);
+        if (mode === 'temu' || mode === '1688') await showTemu(response.state, mode);
         else await showTikTok(response.state);
       } catch {
         activeMode = null; contextLabel.textContent = '页面尚未就绪';
@@ -329,7 +330,7 @@
   chrome.runtime.onMessage.addListener((message, sender) => {
     if (message?.type !== 'STOREPANEL_STATE' || sender.tab?.id !== activeTabId || !message.state) return;
     latestState = message.state;
-    if (message.mode === 'temu') void showTemu(message.state);
+    if (message.mode === 'temu' || message.mode === '1688') void showTemu(message.state, message.mode);
     else if (message.mode === 'tiktok') void showTikTok(message.state);
   });
   chrome.tabs.onActivated.addListener(() => void refresh());
@@ -337,7 +338,7 @@
     if (tabId === activeTabId && (changeInfo.status === 'complete' || changeInfo.url)) void refresh();
   });
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === 'local' && changes.storesnapper_settings_v1 && latestState && activeMode === 'temu') void showTemu(latestState);
+    if (area === 'local' && changes.storesnapper_settings_v1 && latestState && ['temu', '1688'].includes(activeMode)) void showTemu(latestState, activeMode);
   });
   setInterval(() => {
     if (activeMode === '1688-auth' && !authReady) void check1688Auth();

@@ -3,6 +3,7 @@ import test from 'node:test';
 
 let onMessage;
 let cookieValue = '';
+let pageCookieValue = '';
 let cookieListener;
 let firstPartyPageAvailable = false;
 let firstPartySetsCookie = false;
@@ -22,6 +23,7 @@ globalThis.chrome = {
     async executeScript(options) {
       assert.equal(options.target.tabId, 88);
       assert.equal(options.world, 'ISOLATED');
+      if (!options.args) return [{ result: pageCookieValue }];
       assert.match(options.args[1], /imageBase64/);
       const extensionFetch = globalThis.fetch;
       globalThis.fetch = async (url, request) => {
@@ -72,6 +74,7 @@ function send(message, sender = {}) {
 
 test('missing token initializes from an existing 1688 page before signed upload', async () => {
   cookieValue = '';
+  pageCookieValue = '';
   firstPartyPageAvailable = true;
   firstPartySetsCookie = true;
   requests = [];
@@ -85,6 +88,7 @@ test('missing token initializes from an existing 1688 page before signed upload'
 
 test('existing token skips unsigned initialization', async () => {
   cookieValue = 'existing_token';
+  pageCookieValue = '';
   requests = [];
   const session = await uploadImage(image, new AbortController().signal);
   assert.equal(session.image_id, '123456789');
@@ -94,6 +98,7 @@ test('existing token skips unsigned initialization', async () => {
 
 test('no 1688 page reports auth failure without signed upload', async () => {
   cookieValue = '';
+  pageCookieValue = '';
   firstPartyPageAvailable = false;
   firstPartySetsCookie = false;
   requests = [];
@@ -105,6 +110,7 @@ test('no 1688 page reports auth failure without signed upload', async () => {
 
 test('1688 page request without a new cookie remains an auth failure', async () => {
   cookieValue = '';
+  pageCookieValue = '';
   firstPartyPageAvailable = true;
   firstPartySetsCookie = false;
   requests = [];
@@ -114,8 +120,23 @@ test('1688 page request without a new cookie remains an auth failure', async () 
   assert.ok(diagnostics.some((item) => item.stage === 'token_first_party_bootstrap' && item.outcome === 'sent' && item.credential_found === false));
 });
 
+test('visible 1688 page token restores the original working fallback', async () => {
+  cookieValue = '';
+  pageCookieValue = 'page_token_123';
+  firstPartyPageAvailable = true;
+  firstPartySetsCookie = false;
+  requests = [];
+  const diagnostics = [];
+  const session = await uploadImage(image, new AbortController().signal, (item) => diagnostics.push(item));
+  assert.equal(session.image_id, '123456789');
+  assert.equal(requests.length, 1);
+  assert.ok(diagnostics.some((item) => item.stage === 'token_page_cookie' && item.credential_found === true));
+  assert.ok(!diagnostics.some((item) => item.stage === 'token_first_party_bootstrap'));
+});
+
 test('status check does not misreport a missing token as ready', async () => {
   cookieValue = '';
+  pageCookieValue = '';
   assert.deepEqual(await send({ type: 'CHECK_1688_TOKEN' }), { ok: false });
 });
 

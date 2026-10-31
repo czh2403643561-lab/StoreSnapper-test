@@ -80,6 +80,14 @@
       footer.textContent = '悬停商品主图并点击放大镜，右侧显示 1688 相似货源。';
       openPanel.hidden = false;
       openPanel.textContent = '打开当前页面功能面板';
+    } else if (['www.1688.com', 'search.1688.com', 'air.1688.com'].includes(url?.hostname)) {
+      activeMode = '1688';
+      context.dataset.kind = 'ready';
+      title.textContent = '已识别 1688 商品浏览页';
+      detail.textContent = '悬停商品图片，点击放大镜测试相似货源。';
+      footer.textContent = '当前用 1688 商品图片直接验证搜图链路。';
+      openPanel.hidden = false;
+      openPanel.textContent = '打开 1688 找货面板';
     } else if (url?.hostname === 'seller.eu.tiktokshopglobalselling.com' && /^\/product\/manage\/?$/.test(url.pathname)) {
       try { panelState = (await chrome.tabs.sendMessage(activeTab.id, { type: 'STORESNAPPER_GET_PANEL_STATE', mode: 'tiktok' }))?.state; }
       catch { panelState = null; }
@@ -118,7 +126,7 @@
 
     const stored = await chrome.storage.local.get('storesnapper_diagnostics_v1');
     diagnosticRecords = Array.isArray(stored.storesnapper_diagnostics_v1) ? stored.storesnapper_diagnostics_v1 : [];
-    if (activeMode === 'temu' && diagnosticRecords.length) {
+    if (['temu', '1688'].includes(activeMode) && diagnosticRecords.length) {
       const lines = diagnosticRecords.slice(-80).map((item) => {
         const parts = [`${item.at || ''} [${item.type || '图片诊断'}] ${item.phase || item.status || ''}`];
         if (item.upload_stage) parts.push(`阶段：${item.upload_stage}`);
