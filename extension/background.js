@@ -411,7 +411,7 @@ async function blobToDataUrl(blob) {
   return `data:${blob.type || 'image/jpeg'};base64,${btoa(binary)}`;
 }
 
-async function getMtopToken(signal, reportDiagnostic = () => {}) {
+async function getMtopToken(signal, reportDiagnostic = () => {}, waitAfterBootstrap = false) {
   const lookupStep = async (stage, operation, hasCredential = () => false, timeout = MTOP_TOKEN_LOOKUP_STEP_TIMEOUT_MS) => {
     throwIfAborted(signal);
     const startedAt = Date.now();
@@ -423,18 +423,19 @@ async function getMtopToken(signal, reportDiagnostic = () => {}) {
         signal,
         '读取 1688 搜图凭据步骤超时。',
       );
-      reportDiagnostic({ stage, duration_ms: Date.now() - startedAt, credential_found: Boolean(hasCredential(value)) });
+      const found = Boolean(hasCredential(value));
+      reportDiagnostic({ stage, duration_ms: Date.now() - startedAt, credential_found: found, outcome: found ? 'found' : 'empty' });
       return value;
     } catch (error) {
       if (signal?.aborted) throw error;
-      reportDiagnostic({ stage, duration_ms: Date.now() - startedAt, credential_found: false });
+      reportDiagnostic({ stage, duration_ms: Date.now() - startedAt, credential_found: false, outcome: /超时/.test(error?.message || '') ? 'timeout' : 'error' });
       return undefined;
     }
   };
 
   const byUrl = await lookupStep(
     'token_cookie_url',
-    () => chrome.cookies.getAll({ url: 'https://h5api.m.1688.com/', name: '_m_h5_tk' }).catch(() => []),
+    () => chrome.cookies.getAll({ url: 'https://h5api.m.1688.com/', name: '_m_h5_tk' }),
     (items) => items?.some((item) => Boolean(tokenFromCookie(item.value || ''))),
   );
   const fromUrl = tokenFromCookie(byUrl?.find((item) => item.value)?.value || '');
@@ -442,18 +443,20 @@ async function getMtopToken(signal, reportDiagnostic = () => {}) {
 
   const byDomain = await lookupStep(
     'token_cookie_domain',
-    () => chrome.cookies.getAll({ domain: '1688.com', name: '_m_h5_tk' }).catch(() => []),
+    () => chrome.cookies.getAll({ domain: '1688.com', name: '_m_h5_tk' }),
     (items) => items?.some((item) => Boolean(tokenFromCookie(item.value || ''))),
   );
   const fromDomain = tokenFromCookie(byDomain?.find((item) => item.value)?.value || '');
   if (fromDomain) return fromDomain;
-  await lookupStep('token_bootstrap', (lookupSignal) => bootstrapMtopToken(lookupSignal), () => false, 7_500);
-  const afterBootstrap = await lookupStep(
-    'token_cookie_after_bootstrap',
-    (lookupSignal) => waitForMtopCookie(lookupSignal),
-    (items) => items?.some((item) => Boolean(tokenFromCookie(item.value || ''))),
-  );
-  return tokenFromCookie(afterBootstrap?.find((item) => item.value)?.value || '');
+  if (waitAfterBootstrap) {
+    const afterBootstrap = await lookupStep(
+      'token_cookie_after_bootstrap',
+      (lookupSignal) => waitForMtopCookie(lookupSignal),
+      (items) => items?.some((item) => Boolean(tokenFromCookie(item.value || ''))),
+    );
+    return tokenFromCookie(afterBootstrap?.find((item) => item.value)?.value || '');
+  }
+  return '';
 }
 
 async function waitForMtopCookie(signal) {
@@ -464,27 +467,6 @@ async function waitForMtopCookie(signal) {
     await delay(150, signal);
   }
   return [];
-}
-
-async function bootstrapMtopToken(signal) {
-  const url = new URL('https://h5api.m.1688.com/h5/mtop.1688.imageservice.putimage/1.0/');
-  for (const [key, value] of Object.entries({
-    jsv: '2.7.2', appKey: '12574478', t: Date.now().toString(), sign: '0',
-    api: 'mtop.1688.imageService.putImage', v: '1.0', type: 'originaljson', dataType: 'json', data: '{}',
-  })) url.searchParams.set(key, value);
-  let tab;
-  try {
-    tab = await chrome.tabs.create({ url: url.href, active: false });
-    if (tab.id === undefined) return;
-    for (let attempt = 0; attempt < 35; attempt += 1) {
-      throwIfAborted(signal);
-      const current = await chrome.tabs.get(tab.id);
-      if (current.status === 'complete') return;
-      await delay(180, signal);
-    }
-  } finally {
-    if (tab?.id !== undefined) await chrome.tabs.remove(tab.id).catch(() => undefined);
-  }
 }
 
 function tokenFromCookie(value) {
@@ -505,7 +487,7 @@ async function uploadImage(dataUrl, signal, reportDiagnostic = () => {}) {
     updateDiagnostic({ stage, duration_ms: 0 });
     try {
       const token = await awaitPromiseWithTimeout(
-        (lookupSignal) => getMtopToken(lookupSignal, updateDiagnostic),
+        (lookupSignal) => getMtopToken(lookupSignal, updateDiagnostic, stage === 'token_after_bootstrap'),
         MTOP_TOKEN_LOOKUP_TIMEOUT_MS,
         signal,
         '暂时无法取得 1688 搜图凭据。请在 1688 页面确认登录后返回重新检查。',
@@ -531,6 +513,27 @@ async function uploadImage(dataUrl, signal, reportDiagnostic = () => {}) {
   };
 
   let token = await readToken('token_lookup');
+  if (!token) {
+    const startedAt = Date.now();
+    let cookieChanged = false;
+    let outcome = 'completed';
+    const onCookieChanged = (change) => {
+      if (!change.removed && change.cookie?.name === '_m_h5_tk' && /(^|\.)1688\.com$/i.test(change.cookie.domain || '')) cookieChanged = true;
+    };
+    reportDiagnostic({ stage: 'image_upload_bootstrap', duration_ms: 0 });
+    chrome.cookies.onChanged.addListener(onCookieChanged);
+    try {
+      try { await uploadRequest(body, '', signal); }
+      catch (error) {
+        if (signal.aborted) throw error;
+        outcome = error?.name === 'AbortError' || /超时/.test(error?.message || '') ? 'timeout' : 'error';
+      }
+      token = await readToken('token_after_bootstrap');
+    } finally {
+      chrome.cookies.onChanged.removeListener(onCookieChanged);
+      reportDiagnostic({ stage: 'image_upload_bootstrap', duration_ms: Date.now() - startedAt, cookie_changed: cookieChanged, credential_found: Boolean(token), outcome });
+    }
+  }
   if (!token) throw new SearchFailure('auth', '暂时未取得 1688 搜图凭据。请打开 1688 页面确认登录；已登录则返回此处重新检查。', 'login');
 
   let data = await sendImage('image_upload', token);
@@ -551,7 +554,7 @@ async function uploadRequest(body, token, signal) {
   const url = new URL('https://h5api.m.1688.com/h5/mtop.1688.imageservice.putimage/1.0/');
   const params = {
     jsv: '2.7.2', appKey: '12574478', t: time,
-    sign: md5(`${token}&${time}&12574478&${body}`),
+    sign: token ? md5(`${token}&${time}&12574478&${body}`) : '',
     api: 'mtop.1688.imageService.putImage', ecode: '0', v: '1.0', type: 'originaljson', dataType: 'jsonp',
   };
   Object.entries(params).forEach(([key, value]) => url.searchParams.set(key, value));
@@ -794,3 +797,5 @@ function delay(milliseconds, signal) {
     signal.addEventListener('abort', abort, { once: true });
   });
 }
+
+export { uploadImage };

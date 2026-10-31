@@ -122,7 +122,7 @@
       authReady = response?.ok === true;
       show1688Auth(authReady
         ? '已取得 1688 搜图凭据，可以返回 Temu 点击放大镜。'
-        : '暂未取得搜图凭据。请确认此浏览器中的 1688 页面可正常使用，再点“重新检查”。');
+        : '网页已打开，但尚无搜图令牌。请返回 Temu 点击放大镜，插件会用当前商品图片初始化后继续搜索。');
     } catch {
       if (activeTabId === tabId && activeMode === '1688-auth') show1688Auth('检查暂时失败，请稍后重试。');
     } finally { authChecking = false; }
