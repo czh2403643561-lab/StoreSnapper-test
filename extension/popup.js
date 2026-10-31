@@ -119,7 +119,15 @@
     const stored = await chrome.storage.local.get('storesnapper_diagnostics_v1');
     diagnosticRecords = Array.isArray(stored.storesnapper_diagnostics_v1) ? stored.storesnapper_diagnostics_v1 : [];
     if (activeMode === 'temu' && diagnosticRecords.length) {
-      const lines = diagnosticRecords.slice(-80).map((item) => `${item.at || ''} [${item.type || '图片诊断'}] ${item.status || ''}${item.host ? ` · ${item.host}${item.path || ''}` : ''}${item.probe?.message ? ` · ${item.probe.message}` : ''}`);
+      const lines = diagnosticRecords.slice(-80).map((item) => {
+        const parts = [`${item.at || ''} [${item.type || '图片诊断'}] ${item.phase || item.status || ''}`];
+        if (item.upload_stage) parts.push(`阶段：${item.upload_stage}`);
+        if (Number.isFinite(item.elapsed_ms)) parts.push(`耗时：${item.elapsed_ms} ms`);
+        if (typeof item.credential_found === 'boolean') parts.push(`登录凭据：${item.credential_found ? '已找到' : '未找到'}`);
+        if (item.host) parts.push(`${item.host}${item.path || ''}`);
+        if (item.probe?.message) parts.push(item.probe.message);
+        return parts.join(' · ');
+      });
       logsText = lines.join('\n');
     }
     logsNode.textContent = logsText || '暂无记录';

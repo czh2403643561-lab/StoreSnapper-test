@@ -19,6 +19,7 @@
     results: [],
     message: '',
     issue: undefined,
+    diagnostic: undefined,
   };
 
   function isTemuHost(hostname = location.hostname) {
@@ -215,6 +216,7 @@
     state.phase = 'preparing';
     state.product = product;
     state.results = [];
+    state.diagnostic = undefined;
     state.message = '正在准备商品图片…';
     state.issue = undefined;
     currentRequestId = crypto.randomUUID();
@@ -242,14 +244,21 @@
 
   function render() {
     if (!supported) return;
-    const diagnosticState = `${state.phase}:${state.results.length}`;
+    const diagnostic = state.diagnostic;
+    const diagnosticState = `${state.phase}:${state.results.length}:${diagnostic?.stage || ''}:${diagnostic?.duration_ms ?? ''}:${diagnostic?.credential_found ?? ''}`;
     if (state.phase !== 'idle' && diagnosticState !== lastDiagnosticState) {
       lastDiagnosticState = diagnosticState;
       const phase = state.phase;
       const resultCount = state.results.length;
       void chrome.storage.local.get('storesnapper_diagnostics_v1').then((stored) => {
         const records = Array.isArray(stored.storesnapper_diagnostics_v1) ? stored.storesnapper_diagnostics_v1 : [];
-        records.push({ at: new Date().toISOString(), type: 'temu_search', phase, resultCount });
+        const record = { at: new Date().toISOString(), type: 'temu_search', phase, resultCount };
+        if (diagnostic) {
+          record.upload_stage = diagnostic.stage;
+          if (Number.isFinite(diagnostic.duration_ms)) record.elapsed_ms = diagnostic.duration_ms;
+          if (typeof diagnostic.credential_found === 'boolean') record.credential_found = diagnostic.credential_found;
+        }
+        records.push(record);
         return chrome.storage.local.set({ storesnapper_diagnostics_v1: records.slice(-100) });
       }).catch(() => undefined);
     }
@@ -320,8 +329,18 @@
     state.results = Array.isArray(message.results) ? message.results : [];
     state.message = message.message || phaseMessage(state.phase);
     state.issue = message.issue;
+    state.diagnostic = safeUploadDiagnostic(message.diagnostic);
     render();
   });
+
+  function safeUploadDiagnostic(value) {
+    const stages = ['token_lookup', 'token_refresh', 'image_upload', 'image_upload_retry'];
+    if (!value || !stages.includes(value.stage)) return undefined;
+    const diagnostic = { stage: value.stage };
+    if (Number.isFinite(value.duration_ms)) diagnostic.duration_ms = Math.max(0, Math.round(value.duration_ms));
+    if (typeof value.credential_found === 'boolean') diagnostic.credential_found = value.credential_found;
+    return diagnostic;
+  }
 
   document.addEventListener('pointerover', onPointerOver, true);
   document.addEventListener('pointerout', onPointerOut, true);

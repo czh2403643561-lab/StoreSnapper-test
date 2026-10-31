@@ -17,6 +17,7 @@ const IMAGE_HOSTS = new Set(['img.kwcdn.com', 'img-eu.kwcdn.com', 'aimg.kwcdn.co
 const DIAGNOSTIC_IMAGE_HOSTS = new Set(['cbu01.alicdn.com']);
 const MAX_DIAGNOSTIC_IMAGE_BYTES = 256 * 1024;
 const LOGIN_URL = 'https://login.1688.com/member/signin.htm?Done=https%3A%2F%2Fwww.1688.com%2F';
+const MTOP_TOKEN_LOOKUP_TIMEOUT_MS = 10_000;
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || typeof message.type !== 'string') return false;
@@ -270,6 +271,7 @@ function startJob(tabId, message, respond) {
     state: 'preparing',
     officialTabId: undefined,
     officialTabClosed: false,
+    uploadDiagnostic: undefined,
   };
   jobsByTab.set(tabId, job);
   void runSearch(job);
@@ -281,8 +283,15 @@ async function runSearch(job) {
     publish(job, 'preparing', { message: '正在准备商品图片…' });
     const imageData = await prepareImage(job.imageUrl, job.controller.signal);
     assertCurrent(job);
-    publish(job, 'uploading', { message: '正在提交图片到 1688…' });
-    const session = await uploadImage(imageData, job.controller.signal);
+    const updateUploadDiagnostic = (diagnostic) => {
+      job.uploadDiagnostic = diagnostic;
+      const readingToken = diagnostic.stage === 'token_lookup' || diagnostic.stage === 'token_refresh';
+      publish(job, 'uploading', {
+        message: readingToken ? '正在读取 1688 登录状态…' : '正在提交图片到 1688…',
+        diagnostic,
+      });
+    };
+    const session = await uploadImage(imageData, job.controller.signal, updateUploadDiagnostic);
     assertCurrent(job);
     publish(job, 'searching', { message: '正在搜索相似货源…' });
     const page = await searchOffers(session, job.controller.signal);
@@ -332,6 +341,7 @@ async function runSearch(job) {
       issue: failure.issue,
       results: [],
       message: failure.message,
+      diagnostic: job.uploadDiagnostic,
     });
   } finally {
     await closeOfficialTab(job);
@@ -382,9 +392,12 @@ async function blobToDataUrl(blob) {
   return `data:${blob.type || 'image/jpeg'};base64,${btoa(binary)}`;
 }
 
-async function getMtopToken() {
+async function getMtopToken(signal) {
+  throwIfAborted(signal);
   const byUrl = await chrome.cookies.getAll({ url: 'https://h5api.m.1688.com/', name: '_m_h5_tk' }).catch(() => []);
+  throwIfAborted(signal);
   const byDomain = await chrome.cookies.getAll({ domain: '1688.com', name: '_m_h5_tk' }).catch(() => []);
+  throwIfAborted(signal);
   const cookie = [...byUrl, ...byDomain].find((item) => item.value);
   const fromCookieApi = tokenFromCookie(cookie?.value || '');
   if (fromCookieApi) return fromCookieApi;
@@ -392,7 +405,8 @@ async function getMtopToken() {
   // Some Chrome session stores expose the signed-in page cookie to the page but
   // not to chrome.cookies.getAll(). Read only the MTop token from an open 1688
   // tab after the user explicitly starts a search; never persist or log it.
-  const tabs = await chrome.tabs.query({ url: ['https://www.1688.com/*', 'https://search.1688.com/*'] }).catch(() => []);
+  const tabs = await chrome.tabs.query({ url: ['https://www.1688.com/*', 'https://search.1688.com/*', 'https://air.1688.com/*'] }).catch(() => []);
+  throwIfAborted(signal);
   for (const tab of tabs) {
     if (tab.id === undefined) continue;
     const injected = await chrome.scripting.executeScript({
@@ -400,6 +414,7 @@ async function getMtopToken() {
       func: () => document.cookie.split(';').map((item) => item.trim())
         .find((item) => item.startsWith('_m_h5_tk='))?.slice('_m_h5_tk='.length) || '',
     }).catch(() => []);
+    throwIfAborted(signal);
     const token = tokenFromCookie(injected[0]?.result || '');
     if (token) return token;
   }
@@ -410,19 +425,49 @@ function tokenFromCookie(value) {
   try { return decodeURIComponent(value).split('_')[0].trim(); } catch { return ''; }
 }
 
-async function uploadImage(dataUrl, signal) {
+async function uploadImage(dataUrl, signal, reportDiagnostic = () => {}) {
   const base64 = dataUrl.replace(/^data:image\/[^;]+;base64,/i, '');
   if (base64.length < 100) throw new SearchFailure('failed', '待搜索图片内容无效。');
   const body = JSON.stringify({ imageBase64: base64, appName: 'searchImageUpload', appKey: 'pvvljh1grxcmaay2vgpe9nb68gg9ueg2' });
-  let token = await getMtopToken();
+  const readToken = async (stage) => {
+    const startedAt = Date.now();
+    reportDiagnostic({ stage, duration_ms: 0 });
+    try {
+      const token = await awaitPromiseWithTimeout(
+        (lookupSignal) => getMtopToken(lookupSignal),
+        MTOP_TOKEN_LOOKUP_TIMEOUT_MS,
+        signal,
+        '读取 1688 登录状态超时，请确认已登录后重试。',
+      );
+      reportDiagnostic({ stage, duration_ms: Date.now() - startedAt, credential_found: Boolean(token) });
+      return token;
+    } catch (error) {
+      reportDiagnostic({ stage, duration_ms: Date.now() - startedAt, credential_found: false });
+      throw error;
+    }
+  };
+  const sendImage = async (stage, token) => {
+    const startedAt = Date.now();
+    reportDiagnostic({ stage, duration_ms: 0, credential_found: true });
+    try {
+      const data = await uploadRequest(body, token, signal);
+      reportDiagnostic({ stage, duration_ms: Date.now() - startedAt, credential_found: true });
+      return data;
+    } catch (error) {
+      reportDiagnostic({ stage, duration_ms: Date.now() - startedAt, credential_found: true });
+      throw error;
+    }
+  };
+
+  let token = await readToken('token_lookup');
   if (!token) throw new SearchFailure('auth', '请先打开 1688 并完成登录，再重新搜索。', 'login');
 
-  let data = await uploadRequest(body, token, signal);
+  let data = await sendImage('image_upload', token);
   let auth = authFromData(data);
   if (auth?.issue === 'session') {
-    token = await getMtopToken();
+    token = await readToken('token_refresh');
     if (token) {
-      data = await uploadRequest(body, token, signal);
+      data = await sendImage('image_upload_retry', token);
       auth = authFromData(data);
     }
   }
@@ -573,6 +618,44 @@ async function withTimeout(operation, timeout, parentSignal, timeoutMessage) {
     clearTimeout(timer);
     parentSignal?.removeEventListener('abort', abortFromParent);
   }
+}
+
+function awaitPromiseWithTimeout(operation, timeout, parentSignal, timeoutMessage) {
+  const controller = new AbortController();
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let timer;
+    const finish = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      parentSignal?.removeEventListener('abort', abortFromParent);
+      callback(value);
+    };
+    const abortFromParent = () => {
+      const reason = parentSignal.reason || new DOMException('Search cancelled', 'AbortError');
+      controller.abort(reason);
+      finish(reject, reason);
+    };
+    if (parentSignal?.aborted) {
+      abortFromParent();
+      return;
+    }
+    parentSignal?.addEventListener('abort', abortFromParent, { once: true });
+    timer = setTimeout(() => {
+      const failure = new SearchFailure('failed', timeoutMessage);
+      controller.abort(failure);
+      finish(reject, failure);
+    }, timeout);
+    Promise.resolve().then(() => operation(controller.signal)).then(
+      (value) => finish(resolve, value),
+      (error) => finish(reject, error),
+    );
+  });
+}
+
+function throwIfAborted(signal) {
+  if (signal?.aborted) throw signal.reason || new DOMException('Search cancelled', 'AbortError');
 }
 
 function authFromData(data) {
