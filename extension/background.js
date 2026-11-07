@@ -41,6 +41,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
   if (message.type === 'SEARCH_IMAGE') {
+    if (sender.id === chrome.runtime.id && sender.url === chrome.runtime.getURL('batch.html')) {
+      const tabId = Number(message.tabId);
+      if (!Number.isInteger(tabId)) {
+        sendResponse({ ok: false, error: '批量页标签不可用，请重新打开。' });
+        return false;
+      }
+      void chrome.tabs.get(tabId).then((tab) => {
+        if (tab.url !== chrome.runtime.getURL('batch.html')) {
+          sendResponse({ ok: false, error: '批量页标签已变化，请重新打开。' });
+          return;
+        }
+        const job = startJob(tabId, message, sendResponse, true);
+        if (!job) sendResponse({ ok: false, error: '图片链接无效或图片域名未获授权，请检查 image 列。' });
+      }).catch(() => sendResponse({ ok: false, error: '批量页标签不可用，请重新打开。' }));
+      return true;
+    }
     const tabId = sender.tab?.id;
     if (tabId === undefined) {
       sendResponse({ ok: false, error: '请从 Temu 商品图片启动搜图。' });
@@ -267,12 +283,12 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   }
 });
 
-function startJob(tabId, message, respond) {
+function startJob(tabId, message, respond, batch = false) {
   const requestId = String(message.requestId || '');
   const imageUrl = String(message.imageUrl || '');
   let parsed;
   try { parsed = new URL(imageUrl); } catch { return undefined; }
-  if (parsed.protocol !== 'https:' || !IMAGE_HOSTS.has(parsed.hostname) || !requestId) return undefined;
+  if (parsed.protocol !== 'https:' || !(IMAGE_HOSTS.has(parsed.hostname) || batch && parsed.hostname.endsWith('.tiktokcdn-eu.com')) || !requestId) return undefined;
 
   const previous = jobsByTab.get(tabId);
   if (previous) {
@@ -287,9 +303,13 @@ function startJob(tabId, message, respond) {
     title: String(message.title || '').slice(0, 220),
     controller: new AbortController(),
     respond,
+    batch,
     state: 'preparing',
+    results: [],
+    similarTotal: 0,
     officialTabId: undefined,
     officialTabClosed: false,
+    keepOfficialTab: false,
     uploadDiagnostic: undefined,
   };
   jobsByTab.set(tabId, job);
@@ -315,6 +335,7 @@ async function runSearch(job) {
     publish(job, 'searching', { message: '正在搜索相似货源…' });
     const page = await searchOffers(session, job.controller.signal);
     assertCurrent(job);
+    job.similarTotal = page.results.length;
 
     if (!page.results.length) {
       publish(job, 'empty', { results: [], message: '1688 本次没有返回相似货源。可以换一张主图后重试。' });
@@ -334,21 +355,28 @@ async function runSearch(job) {
       const official = await readOfficialResults(job, page.session, job.controller.signal);
       assertCurrent(job);
       if (official.issue === 'challenge') {
+        if (job.batch) throw new SearchFailure('auth', '1688 要求安全验证；请本人完成后继续。', 'challenge');
         enrichmentMessage = '1688 官方结果页要求安全验证；已保留接口返回的相似货源。';
       } else if (official.issue === 'login') {
+        if (job.batch) throw new SearchFailure('auth', '1688 登录状态失效；请本人登录后继续。', 'session');
         enrichmentMessage = '1688 官方结果页需要登录；已保留接口返回的相似货源。';
       } else if (official.results.length) {
-        finalResults = mergeOfficialResults(page.results, official.results);
+        const merged = mergeOfficialResults(page.results, official.results);
+        finalResults = job.batch
+          ? page.results.map((item) => merged.find((candidate) => candidate.offer_id === item.offer_id) || item)
+          : merged;
         enrichment = 'complete';
         enrichmentMessage = '已显示 1688 返回的相似货源。';
       }
     } catch (error) {
       if (job.controller.signal.aborted) throw error;
+      if (job.batch && error instanceof SearchFailure && error.code === 'auth') throw error;
       enrichmentMessage = '已保留接口返回的相似货源；官方卡片补全暂不可用。';
     }
     assertCurrent(job);
     publish(job, 'ready', {
       results: finalResults,
+      similarTotal: job.similarTotal,
       enrichment,
       message: enrichmentMessage,
       disclaimer: '图片搜索结果仅供参考；请在 1688 核实商品、价格、起批量和库存。',
@@ -363,8 +391,10 @@ async function runSearch(job) {
       diagnostic: job.uploadDiagnostic,
     });
   } finally {
-    await closeOfficialTab(job);
-    finishResponse(job, { ok: true, requestId: job.requestId, state: job.state });
+    if (!job.keepOfficialTab) await closeOfficialTab(job);
+    finishResponse(job, job.batch
+      ? { ok: true, requestId: job.requestId, state: job.state, results: job.results, similarTotal: job.similarTotal, message: job.message, issue: job.issue }
+      : { ok: true, requestId: job.requestId, state: job.state });
   }
 }
 
@@ -648,6 +678,12 @@ async function readOfficialResults(job, session, signal) {
   const tab = await chrome.tabs.create({ url: officialSearchPageUrl(session), active: false });
   if (tab.id === undefined) throw new SearchFailure('failed', '无法打开 1688 官方结果页。');
   job.officialTabId = tab.id;
+  const holdForVerification = async (issue) => {
+    if (!job.batch) return { results: [], issue };
+    job.keepOfficialTab = true;
+    await chrome.tabs.update(tab.id, { active: true }).catch(() => undefined);
+    return { results: [], issue };
+  };
   try {
     for (let attempt = 0; attempt < 8; attempt += 1) {
       await delay(900, signal);
@@ -655,20 +691,20 @@ async function readOfficialResults(job, session, signal) {
       if (job.officialTabClosed) return { results: [] };
       const currentTab = await chrome.tabs.get(tab.id).catch(() => undefined);
       if (!currentTab) return { results: [] };
-      if (/login\.1688\.com|member\/signin/i.test(currentTab.url || '')) return { results: [], issue: 'login' };
+      if (/login\.1688\.com|member\/signin/i.test(currentTab.url || '')) return holdForVerification('login');
       const injected = await chrome.scripting.executeScript({
         target: { tabId: tab.id },
         func: readOfficialImageSearchCards,
       }).catch(() => []);
       const data = injected[0]?.result;
-      if (data?.issue) return { results: [], issue: data.issue };
+      if (data?.issue) return holdForVerification(data.issue);
       if (Array.isArray(data?.offers) && data.offers.length) {
         return { results: data.offers.map(normalizeOfficialOffer).filter(Boolean) };
       }
     }
     return { results: [] };
   } finally {
-    await closeOfficialTab(job);
+    if (!job.keepOfficialTab) await closeOfficialTab(job);
   }
 }
 
@@ -802,12 +838,16 @@ function authFromData(data) {
 function publish(job, state, fields = {}) {
   if (!isCurrent(job)) return;
   job.state = state;
-  void chrome.tabs.sendMessage(job.tabId, {
+  if (job.batch && Array.isArray(fields.results)) job.results = fields.results;
+  if (job.batch && fields.message) job.message = fields.message;
+  if (job.batch && fields.issue) job.issue = fields.issue;
+  const update = {
     type: 'SEARCH_UPDATE',
     requestId: job.requestId,
     state,
     ...fields,
-  }).catch(() => undefined);
+  };
+  void (job.batch ? chrome.runtime.sendMessage(update) : chrome.tabs.sendMessage(job.tabId, update)).catch(() => undefined);
 }
 
 function isCurrent(job) {

@@ -15,8 +15,13 @@
     <section class="panel">
       <h2>1. 导入榜单</h2>
       <p>支持 CSV、XLSX；表头需有 <code>rank</code>、<code>product_name</code>、<code>image</code>。导入新文件会替换当前批次；请先导出已有结果。</p>
-      <div class="controls"><input id="file" type="file" accept=".csv,.xlsx"><label>每条间隔 <input id="interval" type="number" min="3" max="60" value="5"> 秒</label></div>
-      <p id="file-info" class="muted">尚未导入文件。</p>
+      <div class="import-layout">
+        <div>
+          <div class="controls"><input id="file" type="file" accept=".csv,.xlsx"><label>每条间隔 <input id="interval" type="number" min="3" max="60" value="5"> 秒</label></div>
+          <p id="file-info" class="muted">尚未导入文件。</p>
+        </div>
+        <button id="drop-zone" class="drop-zone" type="button"><strong>把 CSV / XLSX 拖到这里</strong><span>也可以点击这里选择文件</span></button>
+      </div>
     </section>
     <section class="panel">
       <h2>2. 搜图</h2>
@@ -27,7 +32,7 @@
     <section class="panel">
       <h2>3. 导出给 Muse</h2>
       <p>保留 1688 返回的前 5 个原始候选顺序。无候选标“无”；缺失字段标“未提供”。可在暂停时导出部分结果。</p>
-      <div class="controls"><button id="export-csv" disabled>导出 CSV</button><button id="export-json" disabled>导出 JSON</button><button id="export-html" disabled>导出缩略图 HTML</button></div>
+      <div class="controls"><button id="export-csv" disabled>导出 CSV</button><button id="export-json" disabled>导出 JSON</button><button id="export-html" disabled>导出缩略图 HTML</button><button id="export-zip" class="primary" disabled>打包下载 ZIP（全部三种）</button></div>
     </section>
     <section class="panel">
       <h2>当前批次</h2>

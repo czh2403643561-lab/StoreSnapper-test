@@ -4,6 +4,7 @@
   const detail = document.querySelector('.context-detail');
   const footer = document.querySelector('.footer');
   const openPanel = document.querySelector('.open-panel');
+  const openBatch = document.querySelector('.open-batch');
   const compactSetting = document.querySelector('.compact-setting');
   const exportTikTok = document.querySelector('.export-tiktok');
   const exportDiagnostics = document.querySelector('.export-diagnostics');
@@ -61,6 +62,17 @@
     if (!activeTab?.id || !chrome.sidePanel?.open) { footer.textContent = '此 Chrome 版本暂不支持右侧功能面板。'; return; }
     try { await chrome.sidePanel.open({ tabId: activeTab.id }); window.close(); }
     catch { footer.textContent = '无法打开右侧功能面板，请检查 Chrome 版本或扩展设置。'; }
+  });
+  openBatch.addEventListener('click', async () => {
+    try {
+      const url = chrome.runtime.getURL('batch.html');
+      const [existing] = await chrome.tabs.query({ url });
+      if (existing?.id !== undefined) {
+        await chrome.tabs.update(existing.id, { active: true });
+        if (existing.windowId !== undefined) await chrome.windows.update(existing.windowId, { focused: true });
+      } else await chrome.tabs.create({ url });
+      window.close();
+    } catch { footer.textContent = '无法打开批量图搜页，请重试。'; }
   });
   copyLogs.addEventListener('click', async () => {
     try { await navigator.clipboard.writeText(logsText || '暂无记录'); copyLogs.textContent = '已复制'; }

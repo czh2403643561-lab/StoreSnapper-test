@@ -1,7 +1,8 @@
-import { exportRows, normalizeSources, parseCsv, parseXlsx, toCsv, toHtml } from './batch-core.mjs';
+import { exportRows, normalizeSources, parseCsv, parseXlsx, toCsv, toHtml, toZip } from './batch-core.mjs';
 
 const KEY = 'storesnapper_muse_batch_v1';
 const fileInput = document.querySelector('#file');
+const dropZone = document.querySelector('#drop-zone');
 const intervalInput = document.querySelector('#interval');
 const fileInfo = document.querySelector('#file-info');
 const startButton = document.querySelector('#start');
@@ -9,7 +10,7 @@ const pauseButton = document.querySelector('#pause');
 const progress = document.querySelector('#progress');
 const activity = document.querySelector('#activity');
 const rowsBody = document.querySelector('#rows');
-const exportButtons = ['csv', 'json', 'html'].map((format) => document.querySelector(`#export-${format}`));
+const exportButtons = ['csv', 'json', 'html', 'zip'].map((format) => document.querySelector(`#export-${format}`));
 let batch = null;
 let running = false;
 let pauseRequested = false;
@@ -35,6 +36,7 @@ function render() {
   intervalInput.value = String(batch?.intervalSeconds || 5);
   intervalInput.disabled = running;
   fileInput.disabled = running;
+  dropZone.disabled = running;
   startButton.disabled = running || !canContinue;
   pauseButton.disabled = !running || pauseRequested;
   for (const button of exportButtons) button.disabled = rows.length === 0;
@@ -177,6 +179,37 @@ function download(content, mime, extension) {
 }
 
 fileInput.addEventListener('change', () => void importFile(fileInput.files?.[0]));
+dropZone.addEventListener('click', () => fileInput.click());
+const isFileDrag = (event) => [...(event.dataTransfer?.types || [])].includes('Files');
+let dragDepth = 0;
+document.addEventListener('dragover', (event) => { if (isFileDrag(event)) event.preventDefault(); });
+document.addEventListener('drop', (event) => { if (isFileDrag(event)) event.preventDefault(); });
+dropZone.addEventListener('dragenter', (event) => {
+  if (!isFileDrag(event) || running) return;
+  event.preventDefault();
+  dragDepth += 1;
+  dropZone.classList.add('is-dragover');
+});
+dropZone.addEventListener('dragover', (event) => {
+  if (!isFileDrag(event)) return;
+  event.preventDefault();
+  event.dataTransfer.dropEffect = running ? 'none' : 'copy';
+});
+dropZone.addEventListener('dragleave', () => {
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (!dragDepth) dropZone.classList.remove('is-dragover');
+});
+dropZone.addEventListener('drop', (event) => {
+  if (!isFileDrag(event)) return;
+  event.preventDefault();
+  dragDepth = 0;
+  dropZone.classList.remove('is-dragover');
+  if (running) return;
+  const files = [...event.dataTransfer.files];
+  if (files.length !== 1) { setActivity('请一次拖入一个 CSV 或 XLSX 文件。', true); return; }
+  fileInput.value = '';
+  void importFile(files[0]);
+});
 intervalInput.addEventListener('change', () => {
   if (!batch || running) return;
   batch.intervalSeconds = currentInterval();
@@ -196,6 +229,15 @@ document.querySelector('#export-json').addEventListener('click', () => {
 });
 document.querySelector('#export-html').addEventListener('click', () => {
   if (batch) download(toHtml(exportRows(batch.rows)), 'text/html;charset=utf-8', 'html');
+});
+document.querySelector('#export-zip').addEventListener('click', () => {
+  if (!batch) return;
+  try {
+    download(toZip(exportRows(batch.rows), globalThis.fflate), 'application/zip', 'zip');
+    setActivity('已下载 ZIP，内含 CSV、JSON 和缩略图 HTML。');
+  } catch (error) {
+    setActivity(error?.message || 'ZIP 导出失败。', true);
+  }
 });
 chrome.runtime.onMessage.addListener((message) => {
   if (message?.type === 'SEARCH_UPDATE' && message.requestId === currentRequestId && message.message) {

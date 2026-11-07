@@ -158,6 +158,15 @@ export function toCsv(rows) {
   return '\uFEFF' + [EXPORT_COLUMNS.join(','), ...rows.map((row) => EXPORT_COLUMNS.map((column) => csvCell(row[column])).join(','))].join('\r\n');
 }
 
+export function toZip(rows, fflate) {
+  if (typeof fflate?.zipSync !== 'function' || typeof fflate?.strToU8 !== 'function') throw new Error('ZIP 组件未加载。');
+  return fflate.zipSync({
+    'storesnapper-muse.csv': fflate.strToU8(toCsv(rows)),
+    'storesnapper-muse.json': fflate.strToU8(JSON.stringify(rows, null, 2)),
+    'storesnapper-muse.html': fflate.strToU8(toHtml(rows)),
+  }, { level: 6 });
+}
+
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
 }

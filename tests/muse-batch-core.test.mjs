@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { exportRows, normalizeSources, parseCsv, toCsv, toHtml } from '../muse-edition/extension/batch-core.mjs';
+import { createRequire } from 'node:module';
+import { exportRows, normalizeSources, parseCsv, toCsv, toHtml, toZip } from '../extension/batch-core.mjs';
+
+const require = createRequire(import.meta.url);
+const fflate = require('../extension/vendor/fflate.js');
 
 const image = 'https://p16-oec-general.tiktokcdn-eu.com/example.jpeg';
 
@@ -41,4 +45,14 @@ test('Muse CSV and HTML exports escape source content', () => {
   const html = toHtml([row]);
   assert.match(html, /&lt;script&gt;/);
   assert.doesNotMatch(html, /<script>alert/);
+});
+
+test('Muse ZIP contains the same CSV, JSON and HTML as individual exports', () => {
+  const rows = exportRows([{ source_rank: '1', source_title: '袜子', source_image_url: image, status: '无', similarTotal: 0, candidates: [] }]);
+  const files = fflate.unzipSync(toZip(rows, fflate));
+  const decode = (name) => new TextDecoder('utf-8', { ignoreBOM: true }).decode(files[name]);
+  assert.deepEqual(Object.keys(files).sort(), ['storesnapper-muse.csv', 'storesnapper-muse.html', 'storesnapper-muse.json']);
+  assert.equal(decode('storesnapper-muse.csv'), toCsv(rows));
+  assert.equal(decode('storesnapper-muse.json'), JSON.stringify(rows, null, 2));
+  assert.equal(decode('storesnapper-muse.html'), toHtml(rows));
 });

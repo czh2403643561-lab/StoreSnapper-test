@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "StoreSnapper · Muse 批量图搜",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "导入 TikTok 商品榜单，在本机使用 1688 登录态批量搜图并导出结果。",
   "icons": {
     "16": "assets/storesnapper-16.png",
