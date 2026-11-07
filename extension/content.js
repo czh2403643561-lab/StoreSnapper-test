@@ -18,6 +18,8 @@
     phase: 'idle',
     product: undefined,
     results: [],
+    resultTitle: '',
+    retainedResults: false,
     message: '',
     issue: undefined,
     diagnostic: undefined,
@@ -226,7 +228,7 @@
     void chrome.runtime.sendMessage({ type: 'OPEN_STORE_SIDEPANEL' }).catch(() => undefined);
     state.phase = 'preparing';
     state.product = product;
-    state.results = [];
+    state.retainedResults = state.results.length > 0;
     state.diagnostic = undefined;
     state.message = '正在准备商品图片…';
     state.issue = undefined;
@@ -284,6 +286,8 @@
       message: state.message || phaseMessage(state.phase) || `悬停${is1688Source() ? '1688' : 'Temu'}商品主图，点击放大镜开始搜图。`,
       count: state.results.length,
       results: state.results,
+      resultTitle: state.resultTitle,
+      retainedResults: state.retainedResults,
       hasProduct: Boolean(state.product),
     } }).catch(() => undefined);
   }
@@ -330,6 +334,8 @@
         message: state.message || phaseMessage(state.phase) || `悬停${is1688Source() ? '1688' : 'Temu'}商品主图，点击放大镜开始搜图。`,
         count: state.results.length,
         results: state.results,
+        resultTitle: state.resultTitle,
+        retainedResults: state.retainedResults,
         hasProduct: Boolean(state.product),
       } });
       return false;
@@ -350,7 +356,13 @@
     }
     if (message?.type !== 'SEARCH_UPDATE' || message.requestId !== currentRequestId) return;
     state.phase = message.state || 'failed';
-    state.results = Array.isArray(message.results) ? message.results : [];
+    if (Array.isArray(message.results) && message.results.length > 0) {
+      state.results = message.results;
+      state.resultTitle = state.product?.title || '';
+      state.retainedResults = false;
+    } else if (!state.results.length && ['ready', 'empty'].includes(state.phase)) {
+      state.results = Array.isArray(message.results) ? message.results : [];
+    }
     state.message = message.message || phaseMessage(state.phase);
     state.issue = message.issue;
     state.diagnostic = safeUploadDiagnostic(message.diagnostic);

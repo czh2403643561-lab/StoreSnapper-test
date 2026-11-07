@@ -23,6 +23,7 @@ main{padding:12px}
 .action:hover{filter:brightness(.97)}
 .action:disabled{opacity:.48;cursor:not-allowed}
 .count{margin:4px 1px 8px;color:#53615b;font-size:12px;font-weight:700}
+.result-context{overflow-wrap:anywhere;margin:2px 1px 4px;color:#687873;font-size:11px}
 .supplier-list{display:grid;grid-template-columns:1fr;gap:8px}
 .supplier-card{display:grid;grid-template-columns:clamp(100px,27%,112px) minmax(0,1fr);align-items:center;gap:12px;min-width:0;overflow:hidden;padding:8px;border:1px solid #e3eae6;border-radius:10px;background:#fff;color:inherit;text-align:left}
 .supplier-card:hover{border-color:#8bbdb1;box-shadow:0 2px 8px #194d3314}

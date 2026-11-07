@@ -2,9 +2,13 @@
   const content = document.querySelector('#content');
   const contextLabel = document.querySelector('.context-label');
   let activeTabId = null;
+  let activeWindowId = null;
   let activeMode = null;
   let refreshTimer = 0;
   let latestState = null;
+  let retainedOnDetail = false;
+  let stateRevision = 0;
+  let recentSaveQueue = Promise.resolve();
   let tiktokLogsOpen = false;
   let authReady = false;
   let authChecking = false;
@@ -30,26 +34,92 @@
     return { compactResults: stored.storesnapper_settings_v1?.compactResults !== false };
   }
 
-  async function showTemu(state, mode = 'temu') {
+  function recentResultsKey(windowId) {
+    return `storesnapper_recent_results_v1_${windowId}`;
+  }
+
+  async function readRecentResults(windowId) {
+    if (!Number.isInteger(windowId)) return null;
+    const key = recentResultsKey(windowId);
+    const stored = await chrome.storage.session.get(key);
+    const recent = stored[key];
+    return Array.isArray(recent?.results) && recent.results.length ? recent : null;
+  }
+
+  function shouldSaveRecentResults(state) {
+    return ['enriching', 'ready'].includes(state?.phase)
+      && !state.retainedResults
+      && Array.isArray(state.results)
+      && state.results.length > 0;
+  }
+
+  function saveRecentResults(windowId, mode, state) {
+    if (!Number.isInteger(windowId) || !shouldSaveRecentResults(state)) return Promise.resolve();
+    const key = recentResultsKey(windowId);
+    const resultTitle = state.resultTitle || state.title || '';
+    const recent = {
+      mode,
+      title: state.title || resultTitle,
+      resultTitle,
+      results: state.results,
+      savedAt: Date.now(),
+    };
+    recentSaveQueue = recentSaveQueue
+      .then(() => chrome.storage.session.set({ [key]: recent }))
+      .catch(() => undefined);
+    return recentSaveQueue;
+  }
+
+  function includeRecentResults(state, recent) {
+    if (!recent?.results?.length || state?.results?.length) return state;
+    return {
+      ...state,
+      count: recent.results.length,
+      results: recent.results,
+      resultTitle: recent.resultTitle || recent.title || '',
+      retainedResults: true,
+    };
+  }
+
+  function recentResultsState(recent) {
+    const title = recent.resultTitle || recent.title || '';
+    return {
+      recognized: true,
+      phase: 'ready',
+      title,
+      resultTitle: title,
+      count: recent.results.length,
+      results: recent.results,
+      retainedResults: true,
+      hasProduct: true,
+    };
+  }
+
+  async function showTemu(state, mode = 'temu', onDetail = false) {
+    const revision = stateRevision;
+    const tabId = activeTabId;
     activeMode = mode;
+    retainedOnDetail = onDetail;
     document.body.classList.remove('collector-mode');
-    contextLabel.textContent = mode === '1688' ? '1688 找货测试' : 'Temu 找货';
+    contextLabel.textContent = onDetail ? '最近识图结果' : mode === '1688' ? '1688 找货测试' : 'Temu 找货';
     document.body.classList.toggle('compact', (await settings()).compactResults);
+    if (revision !== stateRevision || activeTabId !== tabId) return;
     content.replaceChildren();
     const header = h('section', 'feature-head');
     header.append(h('h1', '', '1688 相似货源'));
     const status = h('div', 'status');
     const phase = state.phase || 'idle';
     status.dataset.kind = phase;
-    status.textContent = phase === 'ready' ? '已显示 1688 返回的相似货源。'
+    status.textContent = onDetail ? '当前商品详情页保留了最近一次识图结果。'
+      : phase === 'ready' ? '已显示 1688 返回的相似货源。'
       : state.message || '悬停 Temu 商品主图后，点击放大镜开始搜图。';
     const title = h('p', '', state.title || '');
     title.className = 'product-context';
     title.style.cssText = 'margin:3px 0 0;overflow:hidden;color:#687873;text-overflow:ellipsis;white-space:nowrap';
     header.append(title);
     content.append(header);
+    if (onDetail || phase !== 'ready') content.append(status);
     if (phase !== 'ready') {
-      content.append(status);
       const actions = h('div', 'actions');
       if (phase === 'needs-auth') {
         actions.append(actionButton('在 1688 登录／验证', 'primary', () => sendTemuAction('login')));
@@ -62,6 +132,10 @@
       if (actions.childElementCount) content.append(actions);
     }
     if (state.count > 0) {
+      if (onDetail || state.retainedResults) {
+        const titleText = state.resultTitle || state.title;
+        content.append(h('p', 'result-context', titleText ? `保留的识图结果：${titleText}` : '保留最近一次识图结果'));
+      }
       content.append(h('div', 'count', `${state.count} 个相似货源`));
       const list = h('div', 'supplier-list');
       for (const item of state.results || []) list.append(makeOfferCard(item));
@@ -282,23 +356,46 @@
     content.append(box);
   }
 
+  function isTemuProductDetail(url) {
+    const path = url.pathname.toLowerCase();
+    if (/-o\d+-\d+\.html$/.test(path) || /search_result/.test(path)) return false;
+    const hasItemId = [...url.searchParams.keys()].some((key) => /^(goods|product|item)[_-]?id$/i.test(key));
+    return /(?:^|\/)(?:goods|product|item)(?:_detail)?\.html$/.test(path)
+      || /(?:goods|product|item)[_-]?detail|\/(?:goods|product|item)\/|(?:^|-)g-\d{6,}/i.test(path)
+      || hasItemId;
+  }
+
+  async function showContentState(message, mode) {
+    const revision = ++stateRevision;
+    const tabId = activeTabId;
+    const state = message.state;
+    if (shouldSaveRecentResults(state)) await saveRecentResults(activeWindowId, mode, state);
+    if (revision !== stateRevision || activeTabId !== tabId) return;
+    let recent = null;
+    if (!state.results?.length) recent = await readRecentResults(activeWindowId).catch(() => null);
+    if (revision !== stateRevision || activeTabId !== tabId) return;
+    latestState = includeRecentResults(state, recent);
+    void showTemu(latestState, mode);
+  }
+
   async function refresh() {
     clearTimeout(refreshTimer);
     refreshTimer = setTimeout(async () => {
       const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
       activeTabId = tab?.id ?? null;
+      activeWindowId = tab?.windowId ?? null;
       latestState = null;
+      retainedOnDetail = false;
+      stateRevision += 1;
       let url;
       try { url = new URL(tab?.url || ''); } catch { url = null; }
       let mode = null;
+      let retainRecentOnDetail = false;
       if (url?.hostname === 'www.temu.com') {
-        const hasItemId = [...url.searchParams.keys()].some((key) => /^(goods|product|item)[_-]?id$/i.test(key));
-        const detail = /\/(?:login|register|signup|account|checkout)(?:\.html|\/|$)/i.test(url.pathname)
-          || /(?:^|\/)(?:goods|product|item)(?:_detail)?\.html$/.test(url.pathname)
-          || /(?:goods|product|item)[_-]?detail|\/(?:goods|product|item)\/|(?:^|-)g-\d{6,}/i.test(url.pathname)
-          || hasItemId;
-        if (!detail) mode = 'temu';
+        if (isTemuProductDetail(url)) retainRecentOnDetail = true;
+        else if (!/\/(?:login|register|signup|account|checkout)(?:\.html|\/|$)/i.test(url.pathname)) mode = 'temu';
       } else if (url?.hostname === 'seller.eu.tiktokshopglobalselling.com' && /^\/product\/manage\/?$/.test(url.pathname)) mode = 'tiktok';
+      else if (url?.hostname === 'detail.1688.com') retainRecentOnDetail = true;
       else if (['login.1688.com', 'www.1688.com', 'search.1688.com', 'air.1688.com'].includes(url?.hostname)) {
         const stored = await chrome.storage.session.get('storesnapper_1688_auth_flow');
         if (tab?.id !== activeTabId) return;
@@ -312,13 +409,33 @@
         }
         if (url.hostname !== 'login.1688.com') mode = '1688';
       }
-      if (!mode || !tab?.id) { activeMode = null; contextLabel.textContent = '识别当前页面'; renderUnsupported(); return; }
+      if (!mode || !tab?.id) {
+        if (retainRecentOnDetail && tab?.windowId !== undefined) {
+          const recent = await readRecentResults(tab.windowId).catch(() => null);
+          if (tab.id !== activeTabId) return;
+          if (recent) {
+            latestState = recentResultsState(recent);
+            await showTemu(latestState, recent.mode, true);
+            return;
+          }
+        }
+        activeMode = null; contextLabel.textContent = '识别当前页面';
+        renderUnsupported(retainRecentOnDetail ? '此商品详情页暂不显示识图入口。先在商品列表点击放大镜，结果会保留在这里。' : undefined);
+        return;
+      }
+      retainedOnDetail = false;
       try {
         const response = await chrome.tabs.sendMessage(tab.id, { type: 'STORESNAPPER_GET_PANEL_STATE', mode });
         if (tab.id !== activeTabId) return;
         if (!response?.ok || !response.state?.recognized) { activeMode = null; contextLabel.textContent = '页面尚未就绪'; renderUnsupported('刷新目标页面后再打开工具栏菜单。'); return; }
-        latestState = response.state;
-        if (mode === 'temu' || mode === '1688') await showTemu(response.state, mode);
+        if (mode === 'temu' || mode === '1688') {
+          if (shouldSaveRecentResults(response.state)) await saveRecentResults(tab.windowId, mode, response.state);
+          if (tab.id !== activeTabId) return;
+          const recent = response.state.results?.length ? null : await readRecentResults(tab.windowId).catch(() => null);
+          if (tab.id !== activeTabId) return;
+          latestState = includeRecentResults(response.state, recent);
+          await showTemu(latestState, mode);
+        }
         else await showTikTok(response.state);
       } catch {
         activeMode = null; contextLabel.textContent = '页面尚未就绪';
@@ -329,8 +446,7 @@
 
   chrome.runtime.onMessage.addListener((message, sender) => {
     if (message?.type !== 'STOREPANEL_STATE' || sender.tab?.id !== activeTabId || !message.state) return;
-    latestState = message.state;
-    if (message.mode === 'temu' || message.mode === '1688') void showTemu(message.state, message.mode);
+    if (message.mode === 'temu' || message.mode === '1688') void showContentState(message, message.mode);
     else if (message.mode === 'tiktok') void showTikTok(message.state);
   });
   chrome.tabs.onActivated.addListener(() => void refresh());
@@ -338,7 +454,7 @@
     if (tabId === activeTabId && (changeInfo.status === 'complete' || changeInfo.url)) void refresh();
   });
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === 'local' && changes.storesnapper_settings_v1 && latestState && ['temu', '1688'].includes(activeMode)) void showTemu(latestState, activeMode);
+    if (area === 'local' && changes.storesnapper_settings_v1 && latestState && ['temu', '1688'].includes(activeMode)) void showTemu(latestState, activeMode, retainedOnDetail);
   });
   setInterval(() => {
     if (activeMode === '1688-auth' && !authReady) void check1688Auth();
