@@ -9,3 +9,7 @@
 
 - JavaScript 语法、manifest JSON 和差异空白检查通过；Temu／1688 详情页切换及重复识图待用户实测。
 - TikTok Seller Center 的真实页面操作仍待验收。
+
+## Muse 独立版准备
+
+- `muse-edition/README.md` 已整理现有能力、登录态边界、批量导入导出方案和需 Muse 确认的问题；定制代码尚未开发。下一步需前 20 条输入样本和 Muse 的文件／本机接口能力说明。
