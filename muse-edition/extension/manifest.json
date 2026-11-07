@@ -1,0 +1,37 @@
+{
+  "manifest_version": 3,
+  "name": "StoreSnapper · Muse 批量图搜",
+  "version": "0.1.0",
+  "description": "导入 TikTok 商品榜单，在本机使用 1688 登录态批量搜图并导出结果。",
+  "icons": {
+    "16": "assets/storesnapper-16.png",
+    "32": "assets/storesnapper-32.png",
+    "48": "assets/storesnapper-48.png",
+    "128": "assets/storesnapper-128.png"
+  },
+  "action": {
+    "default_title": "打开 Muse 批量图搜",
+    "default_icon": {
+      "16": "assets/storesnapper-16.png",
+      "32": "assets/storesnapper-32.png"
+    }
+  },
+  "permissions": ["cookies", "scripting", "tabs", "storage"],
+  "host_permissions": [
+    "https://*.tiktokcdn-eu.com/*",
+    "https://cbu01.alicdn.com/*",
+    "https://h5api.m.1688.com/*",
+    "https://search.1688.com/*",
+    "https://air.1688.com/*",
+    "https://www.1688.com/*",
+    "https://login.1688.com/*",
+    "https://detail.1688.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'; img-src 'self' data: https://*.tiktokcdn-eu.com https://cbu01.alicdn.com;"
+  }
+}

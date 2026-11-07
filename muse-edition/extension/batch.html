@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="zh-Hans">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>StoreSnapper · Muse 批量图搜</title>
+  <link rel="stylesheet" href="batch.css">
+</head>
+<body>
+  <main>
+    <header>
+      <img src="assets/storesnapper-48.png" alt="">
+      <div><h1>Muse 批量图搜</h1><p>本机使用已登录的 1688，导出候选文件交给 Muse 筛选。</p></div>
+    </header>
+    <section class="panel">
+      <h2>1. 导入榜单</h2>
+      <p>支持 CSV、XLSX；表头需有 <code>rank</code>、<code>product_name</code>、<code>image</code>。导入新文件会替换当前批次；请先导出已有结果。</p>
+      <div class="controls"><input id="file" type="file" accept=".csv,.xlsx"><label>每条间隔 <input id="interval" type="number" min="3" max="60" value="5"> 秒</label></div>
+      <p id="file-info" class="muted">尚未导入文件。</p>
+    </section>
+    <section class="panel">
+      <h2>2. 搜图</h2>
+      <p>请先在此浏览器<a href="https://www.1688.com/" target="_blank" rel="noopener noreferrer">打开并登录 1688</a>。遇到登录或安全验证会暂停并打开验证页，处理后回到这里点击“继续／重试”。暂停按钮会在当前条完成后生效。</p>
+      <div class="controls"><button id="start" class="primary" disabled>开始／继续</button><button id="pause" disabled>本条完成后暂停</button><span id="progress">0 / 0 已完成</span></div>
+      <p id="activity" role="status" aria-live="polite" class="activity">等待导入。</p>
+    </section>
+    <section class="panel">
+      <h2>3. 导出给 Muse</h2>
+      <p>保留 1688 返回的前 5 个原始候选顺序。无候选标“无”；缺失字段标“未提供”。可在暂停时导出部分结果。</p>
+      <div class="controls"><button id="export-csv" disabled>导出 CSV</button><button id="export-json" disabled>导出 JSON</button><button id="export-html" disabled>导出缩略图 HTML</button></div>
+    </section>
+    <section class="panel">
+      <h2>当前批次</h2>
+      <div class="table-wrap"><table><thead><tr><th>rank</th><th>原图</th><th>原标题</th><th>状态</th><th>候选 / 相似总数</th><th>提示</th></tr></thead><tbody id="rows"></tbody></table></div>
+    </section>
+  </main>
+  <script src="vendor/fflate.js"></script>
+  <script type="module" src="batch.js"></script>
+</body>
+</html>

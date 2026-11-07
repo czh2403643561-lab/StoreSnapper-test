@@ -10,6 +10,7 @@
 - JavaScript 语法、manifest JSON 和差异空白检查通过；Temu／1688 详情页切换及重复识图待用户实测。
 - TikTok Seller Center 的真实页面操作仍待验收。
 
-## Muse 独立版准备
+## Muse 独立版（0.1.0，待真实验收）
 
-- `muse-edition/README.md` 已整理现有能力、登录态边界、批量导入导出方案和需 Muse 确认的问题；定制代码尚未开发。下一步需前 20 条输入样本和 Muse 的文件／本机接口能力说明。
+- `muse-edition/extension/` 已做成与原版分开的 Chrome 扩展：导入 CSV/XLSX、按顺序批量搜图、暂停续跑、导出 Top 5 的 CSV/JSON/缩略图 HTML；无候选标「无」，缺失字段标「未提供」。Muse 负责后续相似度及品牌/IP 判断。
+- 提供的脱敏样本 CSV 可读出 20 条，三个 TikTok 图片主机抽样 HEAD 均返回 JPEG；合成 XLSX 导入、导出规则与现有自动检查通过。尚未在真实 1688 登录态下运行前 20 条或验证候选图链接，需用户先安装并验收此批次，通过后再跑 200 条。
