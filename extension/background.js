@@ -131,6 +131,12 @@ async function read1688DetailSource(sender, requestedOfferId) {
 function read1688PageData() {
   const offerId = location.pathname.match(/\/offer\/(\d{8,})\.html/i)?.[1] || '';
   const data = window.context?.result?.data;
+  const galleryData = data?.gallery?.fields || data?.gallery || {};
+  const descriptionData = data?.description?.fields || data?.description || {};
+  const titleData = data?.productTitle?.fields || data?.productTitle || {};
+  const mainPriceData = data?.mainPrice?.fields || data?.mainPrice || {};
+  const packData = data?.productPackInfo?.fields || data?.productPackInfo || {};
+  const packScale = packData?.pieceWeightScale || {};
   const toImageUrl = (entry) => {
     if (typeof entry === 'string') return entry;
     if (!entry || typeof entry !== 'object') return '';
@@ -139,14 +145,13 @@ function read1688PageData() {
     }
     return '';
   };
-  const galleryItems = data?.gallery?.fields?.offerImgList;
+  const galleryItems = galleryData.offerImgList;
   const gallery = Array.isArray(galleryItems) ? galleryItems.slice(0, 80).map(toImageUrl).filter(Boolean) : [];
-  const title = document.querySelector('#productTitle')?.innerText?.trim()
-    || data?.title || data?.subject || data?.offerTitle || '';
-  const supplierName = document.querySelector('#shopName, [class*="shopName"], [class*="shop-name"]')?.innerText?.trim()
+  const title = galleryData.subject || titleData.title || document.querySelector('#productTitle')?.innerText?.split('\n')[0]?.trim() || '';
+  const supplierName = document.querySelector('.shop-company-name, #shopName, [class*="shopName"], [class*="shop-name"]')?.innerText?.trim()
     || data?.supplier?.name || data?.supplierName || '';
-  const descriptionUrl = data?.description?.fields?.detailUrl || '';
-  const rawPriceTiers = data?.price?.fields?.priceRangeList || data?.priceRangeList;
+  const descriptionUrl = descriptionData.detailUrl || '';
+  const rawPriceTiers = mainPriceData.priceModel?.currentPrices || mainPriceData.priceRangeList;
   const priceTiers = Array.isArray(rawPriceTiers) ? rawPriceTiers.slice(0, 100).map((entry) => {
     if (typeof entry === 'string' || typeof entry === 'number') return String(entry).slice(0, 120);
     if (!entry || typeof entry !== 'object') return null;
@@ -157,7 +162,20 @@ function read1688PageData() {
     }
     return Object.keys(value).length ? value : null;
   }).filter(Boolean) : null;
-  const saleCount = data?.trade?.fields?.saleCount ?? data?.saleCount ?? null;
+  const saleCount = titleData.saleNum ?? data?.trade?.fields?.saleCount ?? data?.saleCount ?? null;
+  const dimensionCount = Number.isInteger(packScale.skuDimensionCount) ? packScale.skuDimensionCount : 12;
+  const skuDimensions = Array.isArray(packScale.columnList)
+    ? packScale.columnList.filter((item) => item && typeof item.label === 'string').slice(0, Math.min(dimensionCount, 12)).map((item) => item.label)
+    : [];
+  const skuPackInfo = Array.isArray(packScale.pieceWeightScaleInfo) ? packScale.pieceWeightScaleInfo.slice(0, 120).map((entry) => {
+    if (!entry || typeof entry !== 'object') return null;
+    const value = {};
+    for (const key of ['sku1', 'sku2', 'skuId', 'length', 'width', 'height', 'weight', 'volume']) {
+      const field = entry[key];
+      if (typeof field === 'string' || typeof field === 'number') value[key] = field;
+    }
+    return Object.keys(value).length ? value : null;
+  }).filter(Boolean) : null;
   return {
     offerId,
     sourceUrl: `${location.origin}${location.pathname}`,
@@ -167,6 +185,8 @@ function read1688PageData() {
     descriptionUrl: typeof descriptionUrl === 'string' ? descriptionUrl : '',
     priceTiers: Array.isArray(priceTiers) ? priceTiers.slice(0, 100) : null,
     saleCount: typeof saleCount === 'string' || typeof saleCount === 'number' ? saleCount : null,
+    skuDimensions,
+    skuPackInfo,
   };
 }
 
