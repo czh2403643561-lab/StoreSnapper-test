@@ -1,6 +1,6 @@
 # 1688 商品详情采集：UI 与开发交接
 
-> 本文为原始设计交接。后续用户反馈已调整范围：0.4.13 已通过用户对五项字段/清单行为的验收；0.4.14 正在修复单维度 SKU、SKU 图状态与字节重复识别。实际五商品回归由用户生成 ZIP 后交 Muse 审计。以 [PROJECT_STATUS.md](PROJECT_STATUS.md) 为当前进度。
+> 本文为原始设计交接。后续用户反馈已调整范围：0.4.13 的五项字段/清单行为已验收；0.4.15 按采集报告改为直接读取规格一选项区的 SKU 图片，不再为图片滚动、悬停或逐项等待。实际五商品回归由用户生成 ZIP 后交 Muse 审计。以 [PROJECT_STATUS.md](PROJECT_STATUS.md) 为当前进度。
 
 ## 1. 用户要得到什么
 
@@ -16,7 +16,7 @@
 | 1026497221808 | 手机壳 | 有 | 6 张 | 1 张 | 有；内容尚未下载核验 |
 | 898768092532 | 袜子 | 有 | 7 张 | 2 张 | 有；内容尚未下载核验 |
 
-轮播区还可能有视频，**视频不算图片，首版不打包视频**。在第一个商品页，`data.description.fields.detailUrl` 指向 `itemcdn.tmall.com/1688offer/...`，浏览器请求返回 `var offer_details={"content":"...<img ...>..."};`，内容约 2.3 KB、13 个图片标签。这证明可以定位详情图，但还没有证明 13 张图片均可下载并正确入 ZIP。SKU 图片在页面 `#skuSelection .sku-filter-button img`；`_sum.jpg` 是缩略图，下载时应优先尝试可验证的原图地址，失败则保留缩略图并在清单标注。
+轮播区还可能有视频，**视频不算图片，首版不打包视频**。在第一个商品页，`data.description.fields.detailUrl` 指向 `itemcdn.tmall.com/1688offer/...`，浏览器请求返回 `var offer_details={"content":"...<img ...>..."};`，内容约 2.3 KB、13 个图片标签。这证明可以定位详情图，但还没有证明 13 张图片均可下载并正确入 ZIP。SKU 图片只取 `#skuSelection` 第一组 `.feature-item` 内 `.transverse-filter .sku-filter-button img`，规格名称不固定；`_sum.jpg` 是缩略图，下载时应优先尝试原图，失败则回退缩略图。
 
 页面的 `#productTitle`、`#gallery`、`#skuSelection`、`#productAttributes` 是可见区域；标题、店铺、价格档位、轮播图地址及详情地址可从 `window.context.result.data` 取。商品属性在可见 DOM；尺寸/型号的价格和库存也在 SKU 区 DOM。切换颜色可能改变型号行，采集所有 SKU 时应逐个读取并恢复原选择。不要把商品属性里的「产地」当成发货地。
 
@@ -55,7 +55,7 @@ sku/001.jpg ...              SKU 图片，去重；映射写在 product.json
 detail/001.jpg ...           详情图，保留正文顺序
 ```
 
-`product.json` 当前为 schema 3，包含 `price_tiers_source`、`content_hash_algorithm: "MD5"`；`skus[].sku_values` 按页面维度名映射、`variant` 拼接各维度值。`warnings` 为 `{code,message,...}`，SKU 图片代码区分 `sku_image_source_none`、`sku_image_not_rendered`、`sku_image_download_failed`；无图时 `images.sku` 保留占位项。`image_order.json` 记录所有图片位置、内容哈希、ZIP 路径和去重关系。
+`product.json` 当前为 schema 3，包含 `price_tiers_source`、`content_hash_algorithm: "MD5"`、`sku_images_scope: "first_dimension"`；`skus[].sku_values` 按页面维度名映射、`variant` 拼接各维度值。SKU 图片只取 `#skuSelection` 下第一组规格选项按钮中的图片，规格名称不限定为“颜色”，规格二不采图。读取现有 DOM 图片地址，不滚动、悬停或等待。`warnings` 为 `{code,message,...}`，SKU 图片代码区分 `sku_image_source_none`、`sku_image_not_rendered`、`sku_image_download_failed`；无图时 `images.sku` 保留带规格名的占位项。`image_order.json` 记录所有图片位置、内容哈希、ZIP 路径和去重关系。
 
 图片规则：只接受 HTTPS 图片；允许域名先限定 `cbu01.alicdn.com`，详情内容只从页面给出的 `itemcdn.tmall.com` 地址读取；按实际 `Content-Type` 和文件签名决定扩展名，不靠 URL 后缀猜。去重时同图可只存一份，但每个位置的映射和顺序须保留。排除视频、追踪像素、平台 UI 图标、过小的非商品图片。详情图片的实际 URL 可能有懒加载字段，须解析并测试。无法下载的图片不能在 JSON 里伪称成功。
 

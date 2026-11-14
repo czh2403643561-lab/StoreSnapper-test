@@ -136,8 +136,8 @@
       skuData.skus = mergeSkuPackInfo(skuData.skus, skuData.dimensions, source.skuPackInfo, warnings);
       records.detail.push(...detailResult.failures);
       if (!source.gallery?.length) addWarning(warnings, 'gallery_source_none', '页面未提供轮播图地址。');
-      if (source.priceTiersSource && source.priceTiersSource !== 'mainPrice.priceRangeList') {
-        addWarning(warnings, 'price_tiers_source_ambiguous', '阶梯价使用了非源站阶梯表字段，请按 price_tiers_source 人工核对。', { source_field: source.priceTiersSource });
+      if (source.priceTiersSource && source.priceTiersSource !== 'mainPrice.priceRangeList' && hasConflictingPriceTiers(source.priceTiers)) {
+        addWarning(warnings, 'price_tiers_source_ambiguous', '备用价格字段中存在相同起批量对应不同价格的记录，可能混入 SKU 单价，请人工核对。', { source_field: source.priceTiersSource });
       }
       const sources = [
         ['gallery', (source.gallery || []).map((url) => ({ url, sourceUrl: url }))],
@@ -336,14 +336,6 @@
     const packRows = Array.isArray(source.skuPackInfo) ? source.skuPackInfo : [];
     const dimensionKeys = makeDimensionKeys(dimensions, getPackDimensionCount(packRows));
     const skusByKey = new Map();
-    const imageMap = new Map();
-    const imageElements = new Set();
-    let interacted = 0;
-
-    if (container) {
-      container.scrollIntoView({ behavior: 'instant', block: 'center' });
-      await waitForSkuArea(container, 1800);
-    }
     const initialButtons = variantButtons();
     const originalIndex = initialButtons.findIndex((button) => button.classList.contains('active'));
 
@@ -392,33 +384,7 @@
       return record;
     };
 
-    const collectImages = (variantLabel, rows = getRows(), buttons = variantButtons()) => {
-      const options = [
-        ...buttons.map((button) => ({ element: button, label: cleanText(button.querySelector('.label-name')?.innerText || button.innerText), kind: 'button' })),
-        ...rows.map((row) => ({ element: row, label: cleanText(row.querySelector('.item-label')?.innerText || row.querySelector('.item-label')?.getAttribute('title')), kind: 'row' })),
-      ];
-      for (const option of options) {
-        const values = valuesFor(option.kind === 'button' ? option.label : variantLabel, option.kind === 'row' ? option.element : null, null);
-        const pack = findPack(values);
-        const completeValues = valuesFor(option.kind === 'button' ? option.label : variantLabel, option.kind === 'row' ? option.element : null, pack);
-        const label = dimensions.map((_, index) => completeValues[index]).filter(Boolean).join(' / ') || option.label || variantLabel || '';
-        const addUrl = (raw, imageElement) => {
-          if (imageElement) imageElements.add(imageElement);
-          if (!raw || /^data:|^blob:/i.test(raw)) return;
-          const thumbUrl = raw;
-          const originalUrl = thumbUrl.replace(/_sum\.[a-z0-9]+(?=[?#]|$)/i, '');
-          const key = `${originalUrl}\u0000${label}`;
-          if (!imageMap.has(key)) imageMap.set(key, { url: thumbUrl, requestUrl: originalUrl, fallbackUrl: originalUrl !== thumbUrl ? thumbUrl : '', sourceUrl: thumbUrl, label });
-        };
-        for (const image of option.element.querySelectorAll('img')) {
-          const raw = [image.currentSrc, ...['data-src', 'data-lazy-src', 'data-lazyload-src', 'data-original', 'data-original-src', 'data-ks-lazyload', 'src'].map((name) => image.getAttribute(name))]
-            .find((value) => value && !/^data:|^blob:/i.test(value));
-          addUrl(raw, image);
-        }
-        const background = getBackgroundImageUrl(option.element);
-        if (background) addUrl(background, null);
-      }
-    };
+    const skuImages = collectFirstDimensionImages(container, warnings);
 
     const scanCurrentRows = (variantLabel) => {
       const rows = getRows();
@@ -441,8 +407,6 @@
     };
 
     try {
-      if (!initialButtons.length) scanCurrentRows('');
-      collectImages('');
       for (let index = 0; index < initialButtons.length; index += 1) {
         if (taskOfferId !== getOfferId()) throw new Error('页面商品已变化，已停止 SKU 读取。');
         let buttons = variantButtons();
@@ -451,7 +415,6 @@
         const variantLabel = cleanText(button.querySelector('.label-name')?.innerText || button.innerText);
         let activeIndex = buttons.findIndex((item) => item.classList.contains('active'));
         if (activeIndex !== index) {
-          button.scrollIntoView({ behavior: 'instant', block: 'center' });
           await clickSkuOption(button, container);
           buttons = variantButtons();
           activeIndex = buttons.findIndex((item) => item.classList.contains('active'));
@@ -460,48 +423,15 @@
           addWarning(warnings, 'sku_option_not_selected', `SKU 规格「${variantLabel}」未能切换，未记录其价格和库存。`, { sku_label: variantLabel });
           continue;
         }
-        interacted += 1;
-        await waitForSkuArea(container, 1200);
         scanCurrentRows(variantLabel);
-        collectImages(variantLabel, getRows(), buttons);
-        const rowCount = getRows().length;
-        for (let rowIndex = 0; rowIndex < rowCount; rowIndex += 1) {
-          const row = getRows()[rowIndex];
-          if (!row) continue;
-          row.scrollIntoView({ behavior: 'instant', block: 'center' });
-          dispatchSkuHover(row);
-          await waitForSkuArea(container, 800);
-          collectImages(variantLabel, [row], variantButtons());
-        }
       }
-      if (initialButtons.length && interacted !== initialButtons.length) addWarning(warnings, 'sku_collection_incomplete', '部分 SKU 规格没有完成读取。');
-      if (!initialButtons.length) {
-        const rowCount = getRows().length;
-        for (let rowIndex = 0; rowIndex < rowCount; rowIndex += 1) {
-          const row = getRows()[rowIndex];
-          if (!row) continue;
-          row.scrollIntoView({ behavior: 'instant', block: 'center' });
-          dispatchSkuHover(row);
-          await waitForSkuArea(container, 800);
-          scanCurrentRows('');
-          collectImages('', [row], variantButtons());
-        }
-      }
+      if (!initialButtons.length) scanCurrentRows('');
     } finally {
       if (taskOfferId === getOfferId() && originalIndex >= 0) {
         const buttons = variantButtons();
         const activeIndex = buttons.findIndex((item) => item.classList.contains('active'));
         if (activeIndex !== originalIndex && buttons[originalIndex]) await clickSkuOption(buttons[originalIndex], container);
       }
-    }
-    const images = [...imageMap.values()];
-    if (!images.length) {
-      const imageStatus = imageElements.size ? 'not_rendered' : 'source_none';
-      const reason = imageStatus === 'source_none'
-        ? '滚动并交互后，页面仍未提供 SKU 图片元素或图片地址。'
-        : '页面存在 SKU 图片元素，但交互等待后仍未渲染可用地址。';
-      addWarning(warnings, imageStatus === 'source_none' ? 'sku_image_source_none' : 'sku_image_not_rendered', reason);
-      images.push({ sourceStatus: imageStatus, label: [...skusByKey.values()][0]?.variant || 'SKU', reason });
     }
     const attributes = [];
     for (const row of document.querySelectorAll('#productAttributes tr, #productAttributes li')) {
@@ -521,7 +451,41 @@
       if (match) attributes.push({ name: match[1], value: match[2] });
       else if (cells.length || text) addWarning(warnings, 'attribute_row_unparsed', '存在无法按名称/值拆分的商品属性行，已跳过。');
     }
-    return { images, dimensions: [...new Set(dimensions)], skus: [...skusByKey.values()].slice(0, 240), attributes: attributes.slice(0, 200) };
+    return { images: skuImages, dimensions: [...new Set(dimensions)], skus: [...skusByKey.values()].slice(0, 240), attributes: attributes.slice(0, 200) };
+  }
+
+  function collectFirstDimensionImages(container, warnings) {
+    if (!container) return [];
+    const firstDimension = [...container.querySelectorAll('.module-od-sku-selection .feature-item')]
+      .find((item) => item.querySelector('.transverse-filter .sku-filter-button'));
+    if (!firstDimension) return [];
+
+    const images = [];
+    const buttons = [...firstDimension.querySelectorAll('.transverse-filter .sku-filter-button')];
+    for (const button of buttons) {
+      const label = cleanText(button.querySelector('.label-name')?.innerText || button.innerText) || '规格一';
+      const elements = [...button.querySelectorAll('img')];
+      let rawUrl = elements.flatMap((image) => [
+        image.currentSrc,
+        ...['data-src', 'data-lazy-src', 'data-lazyload-src', 'data-original', 'data-original-src', 'data-ks-lazyload', 'src']
+          .map((name) => image.getAttribute(name)),
+      ]).find((value) => value && /^https?:\/\//i.test(value));
+      rawUrl ||= getBackgroundImageUrl(button);
+      if (rawUrl) {
+        const thumbnailUrl = rawUrl;
+        const originalUrl = thumbnailUrl.replace(/_sum\.[a-z0-9]+(?=[?#]|$)/i, '');
+        images.push({ url: thumbnailUrl, requestUrl: originalUrl, fallbackUrl: originalUrl !== thumbnailUrl ? thumbnailUrl : '', sourceUrl: thumbnailUrl, label });
+        continue;
+      }
+
+      const status = elements.length ? 'not_rendered' : 'source_none';
+      const reason = status === 'source_none'
+        ? `规格一「${label}」没有 SKU 图片元素。`
+        : `规格一「${label}」有图片元素，但当前没有可读取的图片地址。`;
+      addWarning(warnings, status === 'source_none' ? 'sku_image_source_none' : 'sku_image_not_rendered', reason, { sku_label: label });
+      images.push({ sourceStatus: status, label, reason });
+    }
+    return images;
   }
 
   function makeDimensionKeys(labels, fallbackCount = 0) {
@@ -626,43 +590,17 @@
     return '';
   }
 
-  function dispatchSkuHover(element) {
-    if (typeof PointerEvent === 'function') element.dispatchEvent(new PointerEvent('pointerover', { bubbles: true, pointerType: 'mouse' }));
-    element.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, view: window }));
-    element.dispatchEvent(new MouseEvent('mouseenter', { bubbles: false, view: window }));
-  }
-
-  function waitForSkuArea(container, timeout = 1000) {
-    if (!container) return Promise.resolve();
-    return new Promise((resolve) => {
-      let quietTimer;
-      let hardTimer;
-      const observer = new MutationObserver(schedule);
-      const finish = () => {
-        clearTimeout(quietTimer);
-        clearTimeout(hardTimer);
-        observer.disconnect();
-        container.removeEventListener('load', schedule, true);
-        container.removeEventListener('error', schedule, true);
-        resolve();
-      };
-      const settled = () => [...container.querySelectorAll('img')].every((image) => {
-        const deferred = ['data-src', 'data-lazy-src', 'data-lazyload-src', 'data-original', 'data-original-src', 'data-ks-lazyload']
-          .map((name) => image.getAttribute(name)).find(Boolean);
-        const actual = image.currentSrc || image.getAttribute('src') || '';
-        const deferredPending = deferred && deferred !== actual && (!image.naturalWidth || image.naturalWidth <= 1);
-        return image.complete && !deferredPending || !actual && !deferred;
-      });
-      function schedule() {
-        clearTimeout(quietTimer);
-        quietTimer = setTimeout(() => { if (settled()) finish(); }, 260);
-      }
-      observer.observe(container, { attributes: true, childList: true, characterData: true, subtree: true });
-      container.addEventListener('load', schedule, true);
-      container.addEventListener('error', schedule, true);
-      hardTimer = setTimeout(finish, timeout);
-      schedule();
-    });
+  function hasConflictingPriceTiers(priceTiers) {
+    if (!Array.isArray(priceTiers)) return false;
+    const priceByAmount = new Map();
+    for (const tier of priceTiers) {
+      const amount = cleanText(tier?.beginAmount);
+      const price = cleanText(tier?.price);
+      if (!amount || !price) continue;
+      if (priceByAmount.has(amount) && priceByAmount.get(amount) !== price) return true;
+      priceByAmount.set(amount, price);
+    }
+    return false;
   }
 
   function clickSkuOption(button, container) {
@@ -701,6 +639,7 @@
       sale_count: item.saleCount ?? null,
       price_tiers: Array.isArray(item.priceTiers) ? item.priceTiers : null,
       price_tiers_source: item.priceTiersSource || null,
+      sku_images_scope: 'first_dimension',
       sku_dimensions: skuData.dimensions.length ? skuData.dimensions : null,
       skus: skuData.skus.length ? skuData.skus : null,
       sku_pack_info: normalizePackInfo(item.skuPackInfo),
