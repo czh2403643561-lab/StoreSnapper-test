@@ -1,6 +1,6 @@
 # 1688 商品详情采集：UI 与开发交接
 
-> 本文为原始设计交接。后续用户反馈已调整范围：0.4.13 的五项字段/清单行为已验收；0.4.15 直接读取规格一的图片；0.4.16 将 `sku_id` 改从主 SKU 映射读取，包装表只补尺寸和重量。实际五商品回归由用户生成 ZIP 后交 Muse 审计。以 [PROJECT_STATUS.md](PROJECT_STATUS.md) 为当前进度。
+> 本文保留最初的页面与 UI 调研；当前导出范围以 2026-11-14 的“采集精简清单”为准，已覆盖早期字段决定。当前版本 0.4.17 / product schema 5；三商品回归由用户生成 ZIP 后交 Muse 审计。以 [PROJECT_STATUS.md](PROJECT_STATUS.md) 为当前进度。
 
 ## 1. 用户要得到什么
 
@@ -8,7 +8,7 @@
 
 ### 已核实的页面证据（2026-11-14，用户现有 EGO 登录浏览器）
 
-三个指定商品页均能读取 `window.context.result.data`：
+三个指定商品页均能读取 `window.context.result.data`。下表是早期页面核对证据，不代表当前导出字段清单：
 
 | 商品 ID | 类别 | 标题、店铺、价格档位 | 轮播图原始地址 | SKU 图片 | 详情内容地址 |
 | --- | --- | --- | --- | --- | --- |
@@ -55,23 +55,23 @@ sku/001.jpg ...              SKU 图片，去重；映射写在 product.json
 detail/001.jpg ...           详情图，保留正文顺序
 ```
 
-`product.json` 当前为 schema 4，包含 `price_tiers_source`、`content_hash_algorithm: "MD5"`、`sku_images_scope: "first_dimension"`；`skus[].sku_values` 按页面维度名映射、`variant` 拼接各维度值，`sku_id` 从 `Root.fields.dataJson.skuModel.skuInfoMap` 按规格值匹配。包装信息只用于尺寸和重量补充。SKU 图片只取 `#skuSelection` 下第一组规格选项按钮中的图片，规格名称不限定为“颜色”，规格二不采图。读取主 SKU 规格数据或现有 DOM 地址，不滚动、悬停或等待。`warnings` 为 `{code,message,...}`；`sku_pack_dimensions_missing` 表示包装尺寸缺失。`image_order.json` 当前为 schema 2，duplicate 的 `duplicate_of` 指向原图位置 `{group,order}`，并记录内容哈希和 ZIP 路径。
+当前 `product.json` 为 schema 5，字段只包括身份/原始标题、可选原始发货地、SKU 维度/组合/单价/重量、商品级 `package`、图片位置摘要和必要警告；无 SKU 单价时才附 `price_fallback`。属性只保留「筒高、图案、适用性别、适合季节、包装形式、产品类别」。不导出供应商、sku_id、销量、库存、常规阶梯价、pack 明细或白名单以外属性。包裹尺寸在各行都存在且值一致时汇总成一个对象；SKU 重量先用 SKU 自身值，否则只在源站重量一致时将共同值用于各 SKU 和商品包裹。SKU 图片范围固定为第一维度，标签无可用图片时保留占位记录。`warnings` 只允许 `image_download_failed`、`sku_image_missing`、`package_dimensions_missing`。`image_order.json` 仍为 schema 2，保留所有图片位置顺序、路径、MD5、重复关系和 SKU 标签。
 
-图片规则：只接受 HTTPS 图片；允许域名先限定 `cbu01.alicdn.com`，详情内容只从页面给出的 `itemcdn.tmall.com` 地址读取；按实际 `Content-Type` 和文件签名决定扩展名，不靠 URL 后缀猜。去重时同图可只存一份，但每个位置的映射和顺序须保留。排除视频、追踪像素、平台 UI 图标、过小的非商品图片。详情图片的实际 URL 可能有懒加载字段，须解析并测试。无法下载的图片不能在 JSON 里伪称成功。
+图片规则：只接受 HTTPS 图片；允许域名先限定 `cbu01.alicdn.com`，详情内容只从页面给出的 `itemcdn.tmall.com` 地址读取；按实际 `Content-Type` 和文件签名决定扩展名，不靠 URL 后缀猜。去重时同图可只存一份，但每个位置的映射和顺序须保留。插件不按内容或尺寸筛图，详情里的品质承诺、工厂实力等图片也照常导出；视频因不是图片不采集。无法下载的图片不能在 JSON 里伪称成功。
 
 ## 4. 实现路径（主插件，不另做独立插件）
 
-1. 在主插件 `extension/manifest.json` 给 1688 商品详情页增加独立 content script/CSS。当前主插件已有 `detail.1688.com` 主机权限，但没有该页 content script；请勿复用 Temu 识图的页面控件逻辑。
+1. 1688 商品详情页使用独立的 `extension/detail-collector.js` content script 与面板，不复用 Temu 识图的页面控件逻辑。
 2. 内容脚本负责小面板和用户交互。由于扩展隔离环境不能直接依赖页面的 `window.context`，可通过已有 `scripting` 权限在 `MAIN` world 执行一个**只返回所需、已清洗字段**的读取函数；可见 DOM 用内容脚本读取。不要把整个 `window.context`、Cookie 或页面脚本原文传回扩展。
 3. 从 `gallery.fields.offerImgList` 读取轮播原图，从 `description.fields.detailUrl` 读取详情内容。后者是 JavaScript 赋值包裹的 JSON，严格限定 `var offer_details=` 前缀后用 `JSON.parse`，**不要 `eval`**；再用 `DOMParser` 解析其中的 HTML、提取 `<img>` 顺序与 `src/data-src` 等属性。只接受页面实际提供的 HTTPS 地址，校验 host、大小和响应类型。
-4. SKU：先从颜色/款式按钮读取标签与图片，再读取对应型号行价格、库存；有多个颜色时依次切换，等 DOM 稳定后读取，最后恢复用户原选项。切换期间不碰数量、购物车或下单控件。若 `window.context` 后续有完整 SKU 结构，可优先使用，但须与页面可见行交叉核对。
+4. SKU：页面维度原名和可见规格组合用于生成每条 SKU 的 `sku_values`/`variant`，从对应规格行读单价；只读第一维度的图片标签与图片地址。需要切换规格时等待页面稳定并恢复原选择，不读取库存或 1688 内部 sku_id，也不把 pack 行 join 到 SKU。pack 数据只汇总为商品级包裹尺寸/重量。
 5. 扩展后台负责跨域请求：仅允许经过白名单校验的详情内容和商品图片 URL，设置单文件超时与大小上限；不要携带登录 Cookie 请求图片 CDN，不跟随到陌生域名。首版可复用现有 `extension/vendor/fflate.js` 打 ZIP。若经实测图片总量过大，改为受控流式 ZIP；不能悄悄丢图或造成浏览器卡死。ZIP 写好后触发浏览器下载。
 6. 所有异步步骤带本次任务 ID/offer ID；页面导航、重复点击、图片失败或下载失败都要正确更新状态。沿用现有扩展的视觉语言，不改变 Muse 批量页和 Temu 识图。
 
 ## 5. 开发顺序与验收
 
-先打通 **783937409751**：识别 → 读取详情 HTML → 下载至少一张轮播/SKU/详情图 → 真正生成并打开 ZIP 核对图片与 `product.json`。这个链路没通时，不继续铺 UI 或多商品兼容。随后验证另外两个指定商品（不同 SKU 数量），再从用户现有 1688 首页找 2–3 个不同类目的商品检查泛化。不要为测试新开独立登录浏览器；使用用户现有 EGO 浏览器和已加载的主插件。真实验证需确认扩展已重载、商品页内容脚本生效，并在操作系统实际下载的 ZIP 中核对文件数、图片可打开、顺序和字段值。
+当前回归由用户重载扩展后重导 `1098266654765`、`591770681285`、`783937409751` 三个商品，并交 Muse 检查 ZIP；不追加其他类目样本。核对 SKU 维度组合、单价/重量、规格一图片映射、商品级 package、白名单属性、图片完整性与顺序/MD5，以及 warnings 仅有三类允许项。
 
-至少覆盖：首次打开、换商品、重复采集、收起/展开、单张图片失败、详情内容不存在、页面加载慢、下载失败。用已有项目自动检查做局部回归；不要用静态模拟或网络请求成功代替浏览器插件实测。
+真实扩展与 ZIP 检查以用户/Muse 的三包回归结果为准；语法与 manifest 检查只证明代码格式有效，不能代替页面和 ZIP 实测。
 
-**交付判定**：当前首版已实现，仍需用户重载扩展并检查一个实际 ZIP 的属性、SKU、发货地、图片顺序清单和面板位置记忆；通过后再扩大到其他指定页面与类目。未通过真实下载核验的部分标「待验」，不宣称完成。
+**交付判定**：精简版代码待用户重载扩展并完成以上三包实测；Muse 确认字段、规格、图片及 warnings 符合清单后关单。实测之前标记为待验。

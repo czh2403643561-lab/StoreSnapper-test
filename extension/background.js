@@ -148,75 +148,61 @@ function read1688PageData() {
     return '';
   };
   const galleryItems = galleryData.offerImgList;
-  const gallery = Array.isArray(galleryItems) ? galleryItems.slice(0, 80).map(toImageUrl).filter(Boolean) : [];
+  const gallery = Array.isArray(galleryItems) ? galleryItems.map(toImageUrl) : [];
   const title = galleryData.subject || titleData.title || document.querySelector('#productTitle')?.innerText?.split('\n')[0]?.trim() || '';
-  const supplierName = document.querySelector('.shop-company-name, #shopName, [class*="shopName"], [class*="shop-name"]')?.innerText?.trim()
-    || data?.supplier?.name || data?.supplierName || '';
   const shippingOrigin = document.querySelector('.module-od-shipping-services .location')?.innerText?.trim() || '';
   const descriptionUrl = descriptionData.detailUrl || '';
   const ladderPriceList = Array.isArray(mainPriceData.priceRangeList) && mainPriceData.priceRangeList.length
     ? mainPriceData.priceRangeList
     : null;
-  const currentPriceList = Array.isArray(mainPriceData.priceModel?.currentPrices) && mainPriceData.priceModel.currentPrices.length
-    ? mainPriceData.priceModel.currentPrices
-    : null;
-  const rawPriceTiers = ladderPriceList || currentPriceList;
-  const priceTiersSource = ladderPriceList ? 'mainPrice.priceRangeList' : currentPriceList ? 'mainPrice.priceModel.currentPrices' : null;
-  const priceTiers = Array.isArray(rawPriceTiers) ? rawPriceTiers.slice(0, 100).map((entry) => {
-    if (typeof entry === 'string' || typeof entry === 'number') return String(entry).slice(0, 120);
+  const priceTiers = Array.isArray(ladderPriceList) ? ladderPriceList.map((entry) => {
+    if (typeof entry === 'string' || typeof entry === 'number') return String(entry);
     if (!entry || typeof entry !== 'object') return null;
     const value = {};
     for (const key of ['price', 'priceText', 'beginAmount', 'minOrderQuantity', 'startAmount', 'quantity']) {
       const field = entry[key];
-      if (typeof field === 'string' || typeof field === 'number') value[key] = String(field).slice(0, 120);
+      if (typeof field === 'string' || typeof field === 'number') value[key] = String(field);
     }
     return Object.keys(value).length ? value : null;
   }).filter(Boolean) : null;
-  const saleCount = titleData.saleNum ?? data?.trade?.fields?.saleCount ?? data?.saleCount ?? null;
-  const dimensionCount = Number.isInteger(packScale.skuDimensionCount) ? packScale.skuDimensionCount : 12;
   const skuDimensionsFromModel = Array.isArray(skuModel.skuProps)
-    ? skuModel.skuProps.filter((item) => item && typeof item.prop === 'string').slice(0, 12).map((item) => item.prop)
+    ? skuModel.skuProps.filter((item) => item && typeof item.prop === 'string').map((item) => item.prop)
     : [];
+  const dimensionCount = Number.isInteger(packScale.skuDimensionCount) && packScale.skuDimensionCount > 0
+    ? packScale.skuDimensionCount
+    : packScale.columnList?.length || 0;
   const skuDimensionsFromPack = Array.isArray(packScale.columnList)
-    ? packScale.columnList.filter((item) => item && typeof item.label === 'string').slice(0, Math.min(dimensionCount, 12)).map((item) => item.label)
+    ? packScale.columnList.filter((item) => item && typeof item.label === 'string').slice(0, dimensionCount).map((item) => item.label)
     : [];
   const skuDimensions = skuDimensionsFromModel.length ? skuDimensionsFromModel : skuDimensionsFromPack;
   const skuInfoMap = skuModel.skuInfoMap && typeof skuModel.skuInfoMap === 'object' && !Array.isArray(skuModel.skuInfoMap) && Object.keys(skuModel.skuInfoMap).length
     ? skuModel.skuInfoMap
-    : skuModel.skuInfoMapOriginal || {};
-  const skuCatalog = Object.entries(skuInfoMap).slice(0, 240).map(([rawKey, entry]) => {
-    if (!entry || typeof entry !== 'object') return null;
+    : skuModel.skuInfoMapOriginal && typeof skuModel.skuInfoMapOriginal === 'object' && !Array.isArray(skuModel.skuInfoMapOriginal)
+      ? skuModel.skuInfoMapOriginal
+      : {};
+  const skuVariants = Object.keys(skuInfoMap).map((rawKey) => {
     const values = String(rawKey)
       .replace(/&amp;/gi, '&')
       .replace(/&gt;|&#0*62;|&#x0*3e;/gi, '>')
       .split('>')
       .map((value) => value.trim())
       .filter(Boolean);
-    const skuId = entry.skuId ?? entry.sku_id ?? null;
-    return values.length ? {
-      values,
-      skuId: (typeof skuId === 'string' || typeof skuId === 'number') && String(skuId).trim() !== '' && String(skuId).trim() !== '0' ? skuId : null,
-    } : null;
+    return values.length ? { values } : null;
   }).filter(Boolean);
   const skuFirstDimensionOptions = Array.isArray(skuModel.skuProps?.[0]?.value)
-    ? skuModel.skuProps[0].value.slice(0, 120).map((option) => ({
+    ? skuModel.skuProps[0].value.map((option) => ({
       label: typeof option?.name === 'string' ? option.name : '',
       imageUrl: typeof option?.imageUrl === 'string' ? option.imageUrl : '',
     })).filter((option) => option.label || option.imageUrl)
     : [];
-  const skuPackInfo = Array.isArray(packScale.pieceWeightScaleInfo) ? packScale.pieceWeightScaleInfo.slice(0, 120).map((entry) => {
+  const skuPackInfo = Array.isArray(packScale.pieceWeightScaleInfo) ? packScale.pieceWeightScaleInfo.map((entry) => {
     if (!entry || typeof entry !== 'object') return null;
     const value = {};
-    const skuKeys = Object.keys(entry).filter((key) => /^sku\d{1,2}$/.test(key) && Number(key.slice(3)) > 0 && Number(key.slice(3)) <= 12);
-    for (const key of [...skuKeys, 'length', 'width', 'height', 'weight', 'volume']) {
+    for (const key of ['length', 'width', 'height', 'weight']) {
       const field = entry[key];
-      if (/^sku\d{1,2}$/.test(key)) {
-        value[key] = typeof field === 'string' || typeof field === 'number' ? field : null;
-        continue;
-      }
-      if (key === 'length' || key === 'width' || key === 'height' || key === 'weight' || key === 'volume') {
+      if (key === 'length' || key === 'width' || key === 'height' || key === 'weight') {
         const numeric = field === null || field === undefined || field === '' ? NaN : Number(field);
-        value[key] = Number.isFinite(numeric) && numeric > 0 ? field : null;
+        value[key] = Number.isFinite(numeric) && numeric > 0 ? numeric : null;
       }
     }
     return Object.keys(value).length ? value : null;
@@ -224,16 +210,13 @@ function read1688PageData() {
   return {
     offerId,
     sourceUrl: `${location.origin}${location.pathname}`,
-    title: String(title).slice(0, 500),
-    supplierName: String(supplierName).slice(0, 200),
+    title: typeof title === 'string' ? title : String(title),
     shippingOrigin: String(shippingOrigin).slice(0, 100),
     gallery,
     descriptionUrl: typeof descriptionUrl === 'string' ? descriptionUrl : '',
-    priceTiers: Array.isArray(priceTiers) ? priceTiers.slice(0, 100) : null,
-    priceTiersSource,
-    saleCount: typeof saleCount === 'string' || typeof saleCount === 'number' ? saleCount : null,
+    priceTiers,
     skuDimensions,
-    skuCatalog,
+    skuVariants,
     skuFirstDimensionOptions,
     skuPackInfo,
   };
