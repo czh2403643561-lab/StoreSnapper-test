@@ -150,6 +150,7 @@ function read1688PageData() {
   const title = galleryData.subject || titleData.title || document.querySelector('#productTitle')?.innerText?.split('\n')[0]?.trim() || '';
   const supplierName = document.querySelector('.shop-company-name, #shopName, [class*="shopName"], [class*="shop-name"]')?.innerText?.trim()
     || data?.supplier?.name || data?.supplierName || '';
+  const shippingOrigin = document.querySelector('.module-od-shipping-services .location')?.innerText?.trim() || '';
   const descriptionUrl = descriptionData.detailUrl || '';
   const rawPriceTiers = mainPriceData.priceModel?.currentPrices || mainPriceData.priceRangeList;
   const priceTiers = Array.isArray(rawPriceTiers) ? rawPriceTiers.slice(0, 100).map((entry) => {
@@ -170,10 +171,19 @@ function read1688PageData() {
   const skuPackInfo = Array.isArray(packScale.pieceWeightScaleInfo) ? packScale.pieceWeightScaleInfo.slice(0, 120).map((entry) => {
     if (!entry || typeof entry !== 'object') return null;
     const value = {};
-    for (const key of ['sku1', 'sku2', 'skuId', 'length', 'width', 'height', 'weight', 'volume']) {
+    for (const key of ['sku1', 'sku2', 'length', 'width', 'height', 'weight', 'volume']) {
       const field = entry[key];
-      if (typeof field === 'string' || typeof field === 'number') value[key] = field;
+      if (key === 'sku1' || key === 'sku2') {
+        value[key] = typeof field === 'string' || typeof field === 'number' ? field : null;
+        continue;
+      }
+      if (key === 'length' || key === 'width' || key === 'height' || key === 'weight' || key === 'volume') {
+        const numeric = field === null || field === undefined || field === '' ? NaN : Number(field);
+        value[key] = Number.isFinite(numeric) && numeric > 0 ? field : null;
+      }
     }
+    const skuId = entry.skuId;
+    value.skuId = (typeof skuId === 'string' || typeof skuId === 'number') && String(skuId).trim() !== '' && String(skuId).trim() !== '0' ? skuId : null;
     return Object.keys(value).length ? value : null;
   }).filter(Boolean) : null;
   return {
@@ -181,6 +191,7 @@ function read1688PageData() {
     sourceUrl: `${location.origin}${location.pathname}`,
     title: String(title).slice(0, 500),
     supplierName: String(supplierName).slice(0, 200),
+    shippingOrigin: String(shippingOrigin).slice(0, 100),
     gallery,
     descriptionUrl: typeof descriptionUrl === 'string' ? descriptionUrl : '',
     priceTiers: Array.isArray(priceTiers) ? priceTiers.slice(0, 100) : null,

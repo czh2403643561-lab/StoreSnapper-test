@@ -4,6 +4,8 @@
   const IMAGE_HOST = 'cbu01.alicdn.com';
   const MAX_IMAGE_COUNT = 120;
   const MAX_TOTAL_BYTES = 64 * 1024 * 1024;
+  const PANEL_POSITION_KEY = 'storesnapper1688DetailPanelPosition';
+  const PROVINCE_PREFIXES = ['内蒙古', '黑龙江', '广西', '宁夏', '新疆', '西藏', '北京', '天津', '上海', '重庆', '河北', '山西', '辽宁', '吉林', '江苏', '浙江', '安徽', '福建', '江西', '山东', '河南', '湖北', '湖南', '广东', '海南', '四川', '贵州', '云南', '陕西', '甘肃', '青海', '台湾', '香港', '澳门'];
   let offerId = getOfferId();
   let source;
   let panel;
@@ -11,17 +13,20 @@
   let busy = false;
   let activeTaskId = '';
   let scanGeneration = 0;
+  let dragState;
+  let suppressMiniClick = false;
 
   const root = document.createElement('div');
   root.id = 'storesnapper-1688-detail-collector';
-  root.style.cssText = 'all:initial;position:fixed;z-index:2147483647;right:20px;bottom:20px;pointer-events:none;';
+  root.style.cssText = 'all:initial;display:block;position:fixed;z-index:2147483647;right:20px;bottom:20px;width:min(328px,calc(100vw - 32px));pointer-events:none;';
   const shadow = root.attachShadow({ mode: 'closed' });
   shadow.innerHTML = `
     <style>
-      :host{all:initial;font-family:Arial,"Microsoft YaHei",sans-serif;color:#20332c}
+      :host{all:initial;display:block;font-family:Arial,"Microsoft YaHei",sans-serif;color:#20332c}
       *{box-sizing:border-box}
-      .panel{width:min(328px,calc(100vw - 32px));padding:16px;border:1px solid #dce8e1;border-radius:14px;background:#fff;box-shadow:0 8px 30px rgba(14,39,29,.2);pointer-events:auto}
-      .head{display:flex;align-items:center;gap:9px;margin-bottom:13px}
+      .panel{width:100%;padding:16px;border:1px solid #dce8e1;border-radius:14px;background:#fff;box-shadow:0 8px 30px rgba(14,39,29,.2);pointer-events:auto}
+      .panel[hidden],.mini[hidden]{display:none}
+      .head{display:flex;align-items:center;gap:9px;margin-bottom:13px;cursor:move;touch-action:none;user-select:none}
       .brand{display:grid;place-items:center;width:30px;height:30px;border-radius:9px;background:#e8f4ed;color:#1f7655;font-size:16px;font-weight:700}
       .title{flex:1;font-size:15px;font-weight:700}
       button{font:inherit;cursor:pointer}
@@ -40,10 +45,10 @@
       .message.error{color:#a73737}.message.warn{color:#996e13}
       .primary{width:100%;height:39px;border:0;border-radius:9px;background:#247d58;color:#fff;font-size:13px;font-weight:700}
       .primary:hover:not(:disabled){background:#1b6848}.primary:disabled{cursor:wait;opacity:.55}
-      .mini{position:fixed;right:20px;bottom:20px;display:grid;place-items:center;width:48px;height:48px;border:1px solid #cfe2d6;border-radius:50%;background:#fff;color:#1f7655;box-shadow:0 4px 18px rgba(14,39,29,.2);font-size:18px;font-weight:700;pointer-events:auto}
+      .mini{position:absolute;left:0;top:0;display:grid;place-items:center;width:48px;height:48px;border:1px solid #cfe2d6;border-radius:50%;background:#fff;color:#1f7655;box-shadow:0 4px 18px rgba(14,39,29,.2);font-size:18px;font-weight:700;pointer-events:auto;cursor:move;touch-action:none;user-select:none}
     </style>
     <section class="panel" role="region" aria-label="1688 商品采集">
-      <header class="head"><span class="brand" aria-hidden="true">S</span><span class="title">1688 商品采集</span><button class="collapse" type="button" aria-label="收起面板" title="收起">−</button></header>
+      <header class="head" tabindex="0" aria-label="拖动移动面板，可使用方向键调整位置" title="拖动移动；方向键可微调"><span class="brand" aria-hidden="true">S</span><span class="title">1688 商品采集</span><button class="collapse" type="button" aria-label="收起面板" title="收起">−</button></header>
       <div class="status"><span class="dot busy"></span><span class="status-text">正在识别商品…</span></div>
       <div class="product"><div class="product-title"></div><div class="id"></div></div>
       <div class="counts"></div>
@@ -66,7 +71,16 @@
     mini: shadow.querySelector('.mini'),
   };
   shadow.querySelector('.collapse').addEventListener('click', () => setCollapsed(true));
-  view.mini.addEventListener('click', () => setCollapsed(false));
+  view.mini.addEventListener('click', (event) => {
+    if (suppressMiniClick) {
+      event.preventDefault();
+      event.stopPropagation();
+      suppressMiniClick = false;
+      return;
+    }
+    setCollapsed(false);
+  });
+  installPanelPosition();
   view.button.addEventListener('click', () => {
     if (busy) return;
     if (!source) void recognize();
@@ -109,6 +123,7 @@
     const warnings = [];
     const entries = [];
     const records = { gallery: [], sku: [], detail: [] };
+    const groupFileCounts = { gallery: 0, sku: 0, detail: 0 };
     const seen = new Map();
     let totalBytes = 0;
     setUi({ phase: 'busy', message: '正在读取商品与详情…', percent: 10 });
@@ -156,7 +171,7 @@
         const group = records[item.group];
         const prior = resultByUrl.get(item.url);
         if (prior) {
-          group.push({ original_url: item.sourceUrl, download_url: prior.download_url || null, path: prior.path, order: item.order, status: prior.status, ...(prior.reason ? { reason: prior.reason } : {}), ...(item.skuLabel ? { sku_label: item.skuLabel } : {}) });
+          group.push({ original_url: item.sourceUrl, download_url: prior.download_url || null, path: prior.path, order: item.order, status: prior.status, duplicate: true, duplicate_of: prior.path || null, ...(prior.reason ? { reason: prior.reason } : {}), ...(item.skuLabel ? { sku_label: item.skuLabel } : {}) });
           continue;
         }
         const uniqueIndex = bounded.findIndex((candidate) => candidate.url === item.url);
@@ -193,8 +208,9 @@
           if (!format) throw new Error('响应内容不是可识别的图片');
           if (totalBytes + bytes.byteLength > MAX_TOTAL_BYTES) throw new Error('超过本次采集总大小限制');
           totalBytes += bytes.byteLength;
-          const path = `${item.group}/${String(group.filter((record) => record.status === 'downloaded').length + 1).padStart(3, '0')}.${format.ext}`;
-          entries.push({ path, bytes });
+          groupFileCounts[item.group] += 1;
+          const path = `${item.group}/${String(groupFileCounts[item.group]).padStart(3, '0')}.${format.ext}`;
+          entries.push({ path, bytes, kind: 'image' });
           const saved = { path, download_url: downloadUrl, status: 'downloaded', content_type: asset.contentType, size_bytes: bytes.byteLength, format: format.ext };
           resultByUrl.set(item.url, saved);
           group.push({ original_url: item.sourceUrl, path, order: item.order, ...saved, ...(item.skuLabel ? { sku_label: item.skuLabel } : {}) });
@@ -205,13 +221,17 @@
         }
       }
       if (taskOfferId !== getOfferId()) throw new Error('页面商品已变化，请对当前商品重新采集。');
-      const successes = entries.length;
+      for (const group of Object.values(records)) group.sort((left, right) => left.order - right.order);
+      addCollectionWarnings(source, skuData, records, warnings);
+      const imageOrder = buildImageOrderManifest(taskOfferId, records);
+      entries.push({ path: 'image_order.json', bytes: new TextEncoder().encode(JSON.stringify(imageOrder, null, 2)), kind: 'manifest' });
+      const successes = Object.values(groupFileCounts).reduce((sum, count) => sum + count, 0);
       const firstImageFailure = Object.values(records).flat().find((record) => record.status === 'failed' && record.reason)?.reason;
       if (!successes) throw new Error(firstImageFailure || '没有发现可下载的商品图片，请检查页面后重试。');
       const positionCount = Object.values(records).reduce((count, group) => count + group.length, 0);
       const failureCount = Object.values(records).flat().filter((record) => record.status === 'failed').length;
       const product = buildProductJson(source, skuData, records, warnings, successes, positionCount, entries);
-      entries.push({ path: 'product.json', bytes: new TextEncoder().encode(JSON.stringify(product, null, 2)) });
+      entries.push({ path: 'product.json', bytes: new TextEncoder().encode(JSON.stringify(product, null, 2)), kind: 'metadata' });
       setUi({ phase: 'busy', message: '正在写入 ZIP…', percent: 90 });
       const zipFiles = Object.fromEntries(entries.map((entry) => [entry.path, entry.bytes]));
       const archive = globalThis.fflate?.zipSync(zipFiles, { level: 1 });
@@ -320,7 +340,8 @@
         sku_values: { ...(variantLabel ? { color: variantLabel } : {}), ...(size ? { size } : {}) },
         price: values[0] || null,
         stock: values[1] || null,
-        ...(pack ? { sku_id: pack.skuId ?? null, weight_g: pack.weight ?? null } : {}),
+        sku_id: hasSkuId(pack?.skuId) ? pack.skuId : null,
+        weight_g: pack?.weight ?? null,
       };
     }).filter(Boolean);
     let selectedOptions = 0;
@@ -353,14 +374,25 @@
         if (activeIndex !== originalIndex && buttons[originalIndex]) await clickSkuOption(buttons[originalIndex], container);
       }
     }
-    const attributes = [...document.querySelectorAll('#productAttributes tr, #productAttributes li')].map((row) => {
-      const cells = [...row.querySelectorAll('th,td')].map((cell) => cleanText(cell.innerText || cell.textContent)).filter(Boolean);
-      if (cells.length >= 2) return { name: cells[0], value: cells.slice(1).join(' ') };
+    const attributes = [];
+    for (const row of document.querySelectorAll('#productAttributes tr, #productAttributes li')) {
+      const cells = [...row.querySelectorAll('th,td')].map((cell) => cleanText(cell.innerText || cell.textContent));
+      if (cells.length >= 2) {
+        if (cells.length % 2 !== 0) warnings.push('商品属性存在未配对的名称或值，已只保留完整的名称/值对。');
+        for (let index = 0; index + 1 < cells.length; index += 2) {
+          const name = cells[index];
+          const value = cells[index + 1];
+          if (name && value) attributes.push({ name, value });
+          else warnings.push('商品属性存在空名称或空值，已跳过该项。');
+        }
+        continue;
+      }
       const text = cleanText(row.innerText || row.textContent);
       const match = text.match(/^([^:：]{1,80})\s*[:：]\s*(.{1,300})$/);
-      return match ? { name: match[1], value: match[2] } : null;
-    }).filter(Boolean).slice(0, 200);
-    return { images, dimensions: [...new Set(dimensions)], skus: skus.slice(0, 240), attributes };
+      if (match) attributes.push({ name: match[1], value: match[2] });
+      else if (cells.length || text) warnings.push('存在无法按名称/值拆分的商品属性行，已跳过。');
+    }
+    return { images, dimensions: [...new Set(dimensions)], skus: skus.slice(0, 240), attributes: attributes.slice(0, 200) };
   }
 
   function clickSkuOption(button, container) {
@@ -387,22 +419,93 @@
   function buildProductJson(item, skuData, records, warnings, successfulFiles, positionCount, entries) {
     const failed = Object.values(records).flat().filter((record) => record.status === 'failed').length;
     return {
-      schema_version: 1,
+      schema_version: 2,
       source: '1688 detail page',
       source_url: item.sourceUrl,
       offer_id: item.offerId,
       collected_at: new Date().toISOString(),
       title: item.title || null,
       supplier_name: item.supplierName || null,
+      shipping_origin: parseShippingOrigin(item.shippingOrigin),
       sale_count: item.saleCount ?? null,
       price_tiers: Array.isArray(item.priceTiers) ? item.priceTiers : null,
       sku_dimensions: skuData.dimensions.length ? skuData.dimensions : null,
       skus: skuData.skus.length ? skuData.skus : null,
-      sku_pack_info: Array.isArray(item.skuPackInfo) ? item.skuPackInfo : null,
+      sku_pack_info: normalizePackInfo(item.skuPackInfo),
       attributes: skuData.attributes.length ? skuData.attributes : null,
       images: records,
-      collection: { successful_files: successfulFiles, failed_positions: failed, image_positions: positionCount, total_bytes: entries.reduce((sum, entry) => sum + (entry.path === 'product.json' ? 0 : entry.bytes.byteLength), 0) },
+      collection: { successful_files: successfulFiles, failed_positions: failed, image_positions: positionCount, total_bytes: entries.reduce((sum, entry) => sum + (entry.kind === 'image' ? entry.bytes.byteLength : 0), 0) },
       warnings: [...new Set(warnings)],
+    };
+  }
+
+  function hasSkuId(value) {
+    return value !== null && value !== undefined && String(value).trim() !== '' && String(value).trim() !== '0';
+  }
+
+  function normalizePackInfo(rows) {
+    if (!Array.isArray(rows)) return null;
+    return rows.map((row) => {
+      const value = { ...row, skuId: hasSkuId(row?.skuId) ? row.skuId : null };
+      for (const key of ['length', 'width', 'height']) {
+        const numeric = value[key] === null || value[key] === undefined || value[key] === '' ? NaN : Number(value[key]);
+        value[key] = Number.isFinite(numeric) && numeric > 0 ? value[key] : null;
+      }
+      return value;
+    });
+  }
+
+  function parseShippingOrigin(raw) {
+    const text = String(raw || '').replace(/\s+/g, ' ').trim().slice(0, 100);
+    const province = PROVINCE_PREFIXES.find((prefix) => text.startsWith(prefix)) || null;
+    return {
+      source_text: text || null,
+      province,
+      eligibility: province ? (province === '广东' || province === '浙江' ? 'eligible' : 'not_eligible') : 'unknown',
+    };
+  }
+
+  function addCollectionWarnings(item, skuData, records, warnings) {
+    if (!item.supplierName?.trim()) warnings.push('未读取到供应商名称，需人工核对。');
+    const shipping = parseShippingOrigin(item.shippingOrigin);
+    if (shipping.eligibility === 'unknown') warnings.push('未读取到明确发货地，无法确认是否符合广东/浙江要求。');
+    else if (shipping.eligibility === 'not_eligible') warnings.push(`发货地「${shipping.source_text}」不在广东/浙江范围内。`);
+
+    const skus = Array.isArray(skuData.skus) ? skuData.skus : [];
+    const packRows = Array.isArray(item.skuPackInfo) ? item.skuPackInfo : [];
+    if (!skus.length) warnings.push('未读取到 SKU 组合，无法核对 SKU 完整性。');
+    const missingSkuIds = skus.filter((sku) => !hasSkuId(sku.sku_id)).length;
+    if (missingSkuIds) warnings.push(`${missingSkuIds} 条 SKU 缺少 sku_id。`);
+    const skuIds = skus.map((sku) => sku.sku_id).filter(hasSkuId).map(String);
+    if (new Set(skuIds).size !== skuIds.length) warnings.push('检测到重复的 sku_id，请人工核对 SKU 映射。');
+    const packMissingIds = packRows.filter((row) => !hasSkuId(row?.skuId)).length;
+    if (packMissingIds) warnings.push(`${packMissingIds} 条 SKU 包装信息缺少 skuId。`);
+    if (skus.length !== packRows.length) warnings.push(`SKU 组合 ${skus.length} 条，与包装信息 ${packRows.length} 条数量不一致。`);
+    const invalidDimensionRows = packRows.filter((row) => ['length', 'width', 'height'].some((key) => {
+      const numeric = row?.[key] === null || row?.[key] === undefined || row?.[key] === '' ? NaN : Number(row[key]);
+      return !Number.isFinite(numeric) || numeric <= 0;
+    })).length;
+    if (invalidDimensionRows) warnings.push(`${invalidDimensionRows} 条 SKU 包装信息的长宽高缺失或为 0。`);
+    const failedImages = Object.values(records).flat().filter((record) => record.status === 'failed').length;
+    if (failedImages) warnings.push(`${failedImages} 个图片位置未能下载，请查看 image_order.json。`);
+  }
+
+  function buildImageOrderManifest(offerId, records) {
+    const groups = ['gallery', 'sku', 'detail'];
+    return {
+      schema_version: 1,
+      offer_id: offerId,
+      group_order: groups,
+      positions: groups.flatMap((group) => records[group].map((record) => ({
+        group,
+        order: record.order,
+        source_url: record.original_url || null,
+        archive_path: record.path || null,
+        status: record.status,
+        duplicate: Boolean(record.duplicate),
+        ...(record.duplicate_of ? { duplicate_of: record.duplicate_of } : {}),
+        ...(record.reason ? { reason: record.reason } : {}),
+      }))),
     };
   }
 
@@ -481,7 +584,7 @@
     view.id.textContent = offerId ? `商品 ID：${offerId}` : '';
     const galleryCount = source?.gallery?.length;
     const skuCount = document.querySelectorAll('#skuSelection .sku-filter-button img').length;
-    view.counts.textContent = source ? `轮播 ${galleryCount ?? '待读取'} · SKU ${skuCount || '待读取'} · 详情待读取` : '';
+    view.counts.textContent = source ? `轮播 ${galleryCount ?? 0} · SKU ${skuCount}` : '';
     view.message.textContent = message || '';
     view.message.className = `message ${phase === 'failed' ? 'error' : phase === 'partial' ? 'warn' : ''}`.trim();
     view.bar.style.width = `${Math.max(0, Math.min(100, percent || 0))}%`;
@@ -492,6 +595,96 @@
   function setCollapsed(collapsed) {
     panel.hidden = collapsed;
     view.mini.hidden = !collapsed;
+    root.classList.toggle('is-collapsed', collapsed);
+    root.style.width = collapsed ? '48px' : 'min(328px,calc(100vw - 32px))';
+    root.style.height = collapsed ? '48px' : 'auto';
+    if (!collapsed && root.style.left !== 'auto' && root.style.left !== '') {
+      const rect = root.getBoundingClientRect();
+      applyPanelPosition(rect.left, rect.top);
+    }
+  }
+
+  function installPanelPosition() {
+    const head = shadow.querySelector('.head');
+    for (const handle of [head, view.mini]) {
+      handle.addEventListener('pointerdown', beginPanelDrag);
+      handle.addEventListener('pointermove', movePanelDrag);
+      handle.addEventListener('pointerup', finishPanelDrag);
+      handle.addEventListener('pointercancel', finishPanelDrag);
+    }
+    head.addEventListener('keydown', movePanelWithKeyboard);
+    view.mini.addEventListener('keydown', movePanelWithKeyboard);
+    window.addEventListener('resize', () => {
+      if (root.style.left === 'auto' || root.style.left === '') return;
+      const rect = root.getBoundingClientRect();
+      applyPanelPosition(rect.left, rect.top);
+    });
+    chrome.storage.local.get(PANEL_POSITION_KEY, (saved) => {
+      if (chrome.runtime.lastError) return;
+      const position = saved?.[PANEL_POSITION_KEY];
+      if (Number.isFinite(position?.left) && Number.isFinite(position?.top)) applyPanelPosition(position.left, position.top);
+    });
+    chrome.storage.onChanged.addListener((changes, areaName) => {
+      if (areaName !== 'local' || !Object.hasOwn(changes, PANEL_POSITION_KEY)) return;
+      const position = changes[PANEL_POSITION_KEY].newValue;
+      if (Number.isFinite(position?.left) && Number.isFinite(position?.top)) applyPanelPosition(position.left, position.top);
+    });
+  }
+
+  function beginPanelDrag(event) {
+    if (event.button !== 0 || event.target.closest('button')) return;
+    const rect = root.getBoundingClientRect();
+    dragState = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, left: rect.left, top: rect.top, handle: event.currentTarget, moved: false };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function movePanelDrag(event) {
+    if (!dragState || event.pointerId !== dragState.pointerId) return;
+    const deltaX = event.clientX - dragState.startX;
+    const deltaY = event.clientY - dragState.startY;
+    if (!dragState.moved && Math.hypot(deltaX, deltaY) < 3) return;
+    dragState.moved = true;
+    if (dragState.handle === view.mini) suppressMiniClick = true;
+    applyPanelPosition(dragState.left + deltaX, dragState.top + deltaY);
+  }
+
+  function finishPanelDrag(event) {
+    if (!dragState || event.pointerId !== dragState.pointerId) return;
+    const moved = dragState.moved;
+    dragState = undefined;
+    if (!moved) return;
+    const rect = root.getBoundingClientRect();
+    savePanelPosition(rect.left, rect.top);
+    if (suppressMiniClick) setTimeout(() => { suppressMiniClick = false; }, 0);
+  }
+
+  function movePanelWithKeyboard(event) {
+    const offsets = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+    const offset = offsets[event.key];
+    if (!offset) return;
+    event.preventDefault();
+    const rect = root.getBoundingClientRect();
+    const step = event.shiftKey ? 30 : 10;
+    applyPanelPosition(rect.left + offset[0] * step, rect.top + offset[1] * step);
+    const next = root.getBoundingClientRect();
+    savePanelPosition(next.left, next.top);
+  }
+
+  function applyPanelPosition(left, top) {
+    const rect = root.getBoundingClientRect();
+    const maxLeft = Math.max(8, window.innerWidth - rect.width - 8);
+    const maxTop = Math.max(8, window.innerHeight - rect.height - 8);
+    root.style.left = `${Math.max(8, Math.min(maxLeft, left))}px`;
+    root.style.top = `${Math.max(8, Math.min(maxTop, top))}px`;
+    root.style.right = 'auto';
+    root.style.bottom = 'auto';
+  }
+
+  function savePanelPosition(left, top) {
+    try {
+      const write = chrome.storage.local.set({ [PANEL_POSITION_KEY]: { left, top } });
+      if (write && typeof write.catch === 'function') void write.catch(() => {});
+    } catch { /* The panel remains usable if extension storage is temporarily unavailable. */ }
   }
 
   function checkRoute() {
