@@ -152,7 +152,14 @@ function read1688PageData() {
     || data?.supplier?.name || data?.supplierName || '';
   const shippingOrigin = document.querySelector('.module-od-shipping-services .location')?.innerText?.trim() || '';
   const descriptionUrl = descriptionData.detailUrl || '';
-  const rawPriceTiers = mainPriceData.priceModel?.currentPrices || mainPriceData.priceRangeList;
+  const ladderPriceList = Array.isArray(mainPriceData.priceRangeList) && mainPriceData.priceRangeList.length
+    ? mainPriceData.priceRangeList
+    : null;
+  const currentPriceList = Array.isArray(mainPriceData.priceModel?.currentPrices) && mainPriceData.priceModel.currentPrices.length
+    ? mainPriceData.priceModel.currentPrices
+    : null;
+  const rawPriceTiers = ladderPriceList || currentPriceList;
+  const priceTiersSource = ladderPriceList ? 'mainPrice.priceRangeList' : currentPriceList ? 'mainPrice.priceModel.currentPrices' : null;
   const priceTiers = Array.isArray(rawPriceTiers) ? rawPriceTiers.slice(0, 100).map((entry) => {
     if (typeof entry === 'string' || typeof entry === 'number') return String(entry).slice(0, 120);
     if (!entry || typeof entry !== 'object') return null;
@@ -171,9 +178,10 @@ function read1688PageData() {
   const skuPackInfo = Array.isArray(packScale.pieceWeightScaleInfo) ? packScale.pieceWeightScaleInfo.slice(0, 120).map((entry) => {
     if (!entry || typeof entry !== 'object') return null;
     const value = {};
-    for (const key of ['sku1', 'sku2', 'length', 'width', 'height', 'weight', 'volume']) {
+    const skuKeys = Object.keys(entry).filter((key) => /^sku\d{1,2}$/.test(key) && Number(key.slice(3)) > 0 && Number(key.slice(3)) <= 12);
+    for (const key of [...skuKeys, 'length', 'width', 'height', 'weight', 'volume']) {
       const field = entry[key];
-      if (key === 'sku1' || key === 'sku2') {
+      if (/^sku\d{1,2}$/.test(key)) {
         value[key] = typeof field === 'string' || typeof field === 'number' ? field : null;
         continue;
       }
@@ -195,6 +203,7 @@ function read1688PageData() {
     gallery,
     descriptionUrl: typeof descriptionUrl === 'string' ? descriptionUrl : '',
     priceTiers: Array.isArray(priceTiers) ? priceTiers.slice(0, 100) : null,
+    priceTiersSource,
     saleCount: typeof saleCount === 'string' || typeof saleCount === 'number' ? saleCount : null,
     skuDimensions,
     skuPackInfo,
@@ -239,6 +248,7 @@ async function fetch1688DetailFile(sender, rawUrl, kind, requestedOfferId) {
       base64: encodeBase64(bytes),
       contentType: (response.headers.get('content-type') || '').split(';', 1)[0].trim().toLowerCase(),
       size: bytes.byteLength,
+      contentHash: md5(bytes),
     };
   } catch (error) {
     if (error?.name === 'AbortError') throw new Error('文件请求超时。');

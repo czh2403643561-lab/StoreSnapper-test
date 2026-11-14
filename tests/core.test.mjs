@@ -17,6 +17,7 @@ import {
 
 test('MD5 matches the standard signing vector', () => {
   assert.equal(md5('abc'), '900150983cd24fb0d6963f7d28e17f72');
+  assert.equal(md5(new TextEncoder().encode('abc')), '900150983cd24fb0d6963f7d28e17f72');
 });
 
 test('response parsing accepts JSON and JSONP and flags an access challenge', () => {

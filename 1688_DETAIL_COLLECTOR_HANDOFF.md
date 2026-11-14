@@ -1,6 +1,6 @@
 # 1688 商品详情采集：UI 与开发交接
 
-> 本文为原始设计交接。后续用户反馈已调整范围：当前 0.4.13 已实现首版采集，并新增位置记忆、字段自检与发货地红线；实际 ZIP 与跨商品效果仍待用户验收。以 [PROJECT_STATUS.md](PROJECT_STATUS.md) 为当前进度。
+> 本文为原始设计交接。后续用户反馈已调整范围：0.4.13 已通过用户对五项字段/清单行为的验收；0.4.14 正在修复单维度 SKU、SKU 图状态与字节重复识别。实际五商品回归由用户生成 ZIP 后交 Muse 审计。以 [PROJECT_STATUS.md](PROJECT_STATUS.md) 为当前进度。
 
 ## 1. 用户要得到什么
 
@@ -55,7 +55,7 @@ sku/001.jpg ...              SKU 图片，去重；映射写在 product.json
 detail/001.jpg ...           详情图，保留正文顺序
 ```
 
-`product.json` 至少包含：`schema_version`、`source_url`、`offer_id`、`collected_at`、`title`、`supplier_name`、`shipping_origin`（页面显示的发货来源及是否符合广东/浙江要求）、`sale_count`（若可得）、`price_tiers`（价格 + 起批量；不要将其误写为成交价）、`sku_dimensions`、`skus`（组合、页面可见价格/库存；缺失明确为 `null`）、`sku_pack_info`（缺失尺寸为 `null`）、`attributes`（严格名称/值配对）、`images.gallery/sku/detail`（原 URL、ZIP 内路径、顺序、下载状态、失败原因）、`warnings`。可记录页面明确数据，但不能推断缺失字段。
+`product.json` 当前为 schema 3，包含 `price_tiers_source`、`content_hash_algorithm: "MD5"`；`skus[].sku_values` 按页面维度名映射、`variant` 拼接各维度值。`warnings` 为 `{code,message,...}`，SKU 图片代码区分 `sku_image_source_none`、`sku_image_not_rendered`、`sku_image_download_failed`；无图时 `images.sku` 保留占位项。`image_order.json` 记录所有图片位置、内容哈希、ZIP 路径和去重关系。
 
 图片规则：只接受 HTTPS 图片；允许域名先限定 `cbu01.alicdn.com`，详情内容只从页面给出的 `itemcdn.tmall.com` 地址读取；按实际 `Content-Type` 和文件签名决定扩展名，不靠 URL 后缀猜。去重时同图可只存一份，但每个位置的映射和顺序须保留。排除视频、追踪像素、平台 UI 图标、过小的非商品图片。详情图片的实际 URL 可能有懒加载字段，须解析并测试。无法下载的图片不能在 JSON 里伪称成功。
 

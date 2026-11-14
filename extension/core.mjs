@@ -20,7 +20,7 @@ export function md5(input) {
     6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21,
   ];
   const constants = Array.from({ length: 64 }, (_, index) => Math.floor(Math.abs(Math.sin(index + 1)) * 0x1_0000_0000) >>> 0);
-  const source = new TextEncoder().encode(input);
+  const source = input instanceof Uint8Array ? input : new TextEncoder().encode(input);
   const paddedLength = Math.ceil((source.length + 9) / 64) * 64;
   const bytes = new Uint8Array(paddedLength);
   bytes.set(source);
