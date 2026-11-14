@@ -133,7 +133,7 @@
       if (taskOfferId !== getOfferId()) throw new Error('页面商品已变化，请对当前商品重新采集。');
       setUi({ phase: 'busy', message: '正在读取 SKU 规格…', percent: 16 });
       const skuData = await collectSkuData(taskOfferId, warnings);
-      skuData.skus = mergeSkuPackInfo(skuData.skus, skuData.dimensions, source.skuPackInfo, warnings);
+      skuData.skus = mergeSkuCatalogAndPackInfo(skuData.skus, skuData.dimensions, source.skuCatalog, source.skuPackInfo, warnings);
       records.detail.push(...detailResult.failures);
       if (!source.gallery?.length) addWarning(warnings, 'gallery_source_none', '页面未提供轮播图地址。');
       if (source.priceTiersSource && source.priceTiersSource !== 'mainPrice.priceRangeList' && hasConflictingPriceTiers(source.priceTiers)) {
@@ -181,15 +181,17 @@
         const group = records[item.group];
         const prior = resultByUrl.get(item.url);
         if (prior) {
-          group.push({ original_url: item.sourceUrl, download_url: prior.download_url || item.url, path: prior.path, order: item.order, status: prior.status, duplicate: true, duplicate_of: prior.path || null, ...(prior.content_hash ? { content_hash: prior.content_hash } : {}), ...(prior.reason ? { reason: prior.reason } : {}), ...(item.skuLabel ? { sku_label: item.skuLabel } : {}) });
+          const originalPosition = prior.origin_position || prior.duplicate_of || null;
+          resultByUrl.set(item.url, { ...prior, duplicate: true, duplicate_of: originalPosition, origin_position: originalPosition });
+          group.push({ original_url: item.sourceUrl, download_url: prior.download_url || item.url, path: prior.path, order: item.order, status: prior.status, duplicate: true, duplicate_of: originalPosition, ...(prior.content_hash ? { content_hash: prior.content_hash } : {}), ...(prior.reason ? { reason: prior.reason } : {}), ...(item.skuLabel ? { sku_label: item.skuLabel } : {}) });
           if (item.group === 'sku' && prior.status === 'failed') addWarning(warnings, 'sku_image_download_failed', `SKU 图片「${item.skuLabel || '未命名规格'}」下载失败：${prior.reason || '请求失败'}`);
           continue;
         }
         const uniqueIndex = bounded.findIndex((candidate) => candidate.url === item.url);
         if (uniqueIndex < 0) {
-          const skipped = { path: null, status: 'failed', reason: '超过本次采集图片数量上限' };
+          const skipped = { path: null, status: 'failed', reason: '超过本次采集图片数量上限', origin_position: { group: item.group, order: item.order } };
           resultByUrl.set(item.url, skipped);
-          group.push({ original_url: item.sourceUrl, path: null, order: item.order, ...skipped, ...(item.skuLabel ? { sku_label: item.skuLabel } : {}) });
+          group.push({ original_url: item.sourceUrl, path: null, order: item.order, status: skipped.status, reason: skipped.reason, ...(item.skuLabel ? { sku_label: item.skuLabel } : {}) });
           continue;
         }
         setUi({ phase: 'busy', message: `正在下载图片 ${Math.min(index + 1, bounded.length)}/${bounded.length}…`, percent: 20 + Math.round(68 * (Math.min(index + 1, bounded.length) / Math.max(1, bounded.length))) });
@@ -215,9 +217,10 @@
           if (!contentHash) throw new Error('图片响应缺少有效的 MD5 内容哈希');
           const sameContent = resultByHash.get(contentHash);
           if (sameContent) {
-            const duplicate = { ...sameContent, download_url: downloadUrl, content_hash: contentHash, duplicate: true, duplicate_of: sameContent.path };
+            const originalPosition = sameContent.origin_position || sameContent.duplicate_of || null;
+            const duplicate = { ...sameContent, download_url: downloadUrl, content_hash: contentHash, duplicate: true, duplicate_of: originalPosition, origin_position: originalPosition };
             resultByUrl.set(item.url, duplicate);
-            group.push({ original_url: item.sourceUrl, path: sameContent.path, order: item.order, status: 'downloaded', duplicate: true, duplicate_of: sameContent.path, download_url: downloadUrl, content_type: asset.contentType, size_bytes: bytes.byteLength, format: format.ext, content_hash: contentHash, ...(item.skuLabel ? { sku_label: item.skuLabel } : {}) });
+            group.push({ original_url: item.sourceUrl, path: sameContent.path, order: item.order, status: 'downloaded', duplicate: true, duplicate_of: originalPosition, download_url: downloadUrl, content_type: asset.contentType, size_bytes: bytes.byteLength, format: format.ext, content_hash: contentHash, ...(item.skuLabel ? { sku_label: item.skuLabel } : {}) });
             continue;
           }
           if (totalBytes + bytes.byteLength > MAX_TOTAL_BYTES) throw new Error('超过本次采集总大小限制');
@@ -225,14 +228,15 @@
           groupFileCounts[item.group] += 1;
           const path = `${item.group}/${String(groupFileCounts[item.group]).padStart(3, '0')}.${format.ext}`;
           entries.push({ path, bytes, kind: 'image' });
-          const saved = { path, download_url: downloadUrl, status: 'downloaded', content_type: asset.contentType, size_bytes: bytes.byteLength, format: format.ext, content_hash: contentHash };
+          const saved = { path, download_url: downloadUrl, status: 'downloaded', content_type: asset.contentType, size_bytes: bytes.byteLength, format: format.ext, content_hash: contentHash, origin_position: { group: item.group, order: item.order } };
           resultByUrl.set(item.url, saved);
           resultByHash.set(contentHash, saved);
-          group.push({ original_url: item.sourceUrl, path, order: item.order, ...saved, ...(item.skuLabel ? { sku_label: item.skuLabel } : {}) });
+          const { origin_position: _originPosition, ...savedRecord } = saved;
+          group.push({ original_url: item.sourceUrl, order: item.order, ...savedRecord, ...(item.skuLabel ? { sku_label: item.skuLabel } : {}) });
         } catch (error) {
-          const failed = { path: null, status: 'failed', reason: error?.message || '下载失败' };
+          const failed = { path: null, status: 'failed', reason: error?.message || '下载失败', origin_position: { group: item.group, order: item.order } };
           resultByUrl.set(item.url, failed);
-          group.push({ original_url: item.sourceUrl, path: null, order: item.order, ...failed, ...(item.skuLabel ? { sku_label: item.skuLabel } : {}) });
+          group.push({ original_url: item.sourceUrl, path: null, order: item.order, status: failed.status, reason: failed.reason, ...(item.skuLabel ? { sku_label: item.skuLabel } : {}) });
           if (item.group === 'sku') addWarning(warnings, 'sku_image_download_failed', `SKU 图片「${item.skuLabel || '未命名规格'}」下载失败：${failed.reason}`);
         }
       }
@@ -366,7 +370,7 @@
         sku_values: skuValues,
         price: values[0] || null,
         stock: values[1] || null,
-        sku_id: hasSkuId(pack?.skuId) ? pack.skuId : null,
+        sku_id: null,
         weight_g: pack?.weight ?? null,
       };
       const key = dimensionValues.some((value) => normalizeSkuValue(value))
@@ -396,7 +400,7 @@
           sku_values: Object.fromEntries(dimensionKeys.flatMap((key, index) => dimensionValues[index] ? [[key, dimensionValues[index]]] : [])),
           price: null,
           stock: null,
-          sku_id: hasSkuId(pack?.skuId) ? pack.skuId : null,
+          sku_id: null,
           weight_g: pack?.weight ?? null,
         };
         const key = dimensionValues.map(normalizeSkuValue).join('\u0000');
@@ -455,22 +459,30 @@
   }
 
   function collectFirstDimensionImages(container, warnings) {
-    if (!container) return [];
-    const firstDimension = [...container.querySelectorAll('.module-od-sku-selection .feature-item')]
+    const firstDimension = container && [...container.querySelectorAll('.module-od-sku-selection .feature-item')]
       .find((item) => item.querySelector('.transverse-filter .sku-filter-button'));
-    if (!firstDimension) return [];
-
-    const images = [];
-    const buttons = [...firstDimension.querySelectorAll('.transverse-filter .sku-filter-button')];
-    for (const button of buttons) {
-      const label = cleanText(button.querySelector('.label-name')?.innerText || button.innerText) || '规格一';
+    const buttons = firstDimension ? [...firstDimension.querySelectorAll('.transverse-filter .sku-filter-button')] : [];
+    const domOptions = buttons.map((button) => {
       const elements = [...button.querySelectorAll('img')];
-      let rawUrl = elements.flatMap((image) => [
+      const url = elements.flatMap((image) => [
         image.currentSrc,
         ...['data-src', 'data-lazy-src', 'data-lazyload-src', 'data-original', 'data-original-src', 'data-ks-lazyload', 'src']
           .map((name) => image.getAttribute(name)),
       ]).find((value) => value && /^https?:\/\//i.test(value));
-      rawUrl ||= getBackgroundImageUrl(button);
+      return {
+        label: cleanText(button.querySelector('.label-name')?.innerText || button.innerText),
+        imageUrl: url || getBackgroundImageUrl(button),
+        hasImageElement: elements.length > 0,
+      };
+    });
+    const domByLabel = new Map(domOptions.map((option) => [normalizeSkuValue(option.label), option]));
+    const sourceOptions = Array.isArray(source.skuFirstDimensionOptions) ? source.skuFirstDimensionOptions : [];
+    const options = sourceOptions.length ? sourceOptions : domOptions;
+    const images = [];
+    for (const option of options) {
+      const label = cleanText(option.label) || '规格一';
+      const domOption = domByLabel.get(normalizeSkuValue(label));
+      const rawUrl = option.imageUrl || domOption?.imageUrl || '';
       if (rawUrl) {
         const thumbnailUrl = rawUrl;
         const originalUrl = thumbnailUrl.replace(/_sum\.[a-z0-9]+(?=[?#]|$)/i, '');
@@ -478,7 +490,7 @@
         continue;
       }
 
-      const status = elements.length ? 'not_rendered' : 'source_none';
+      const status = domOption?.hasImageElement ? 'not_rendered' : 'source_none';
       const reason = status === 'source_none'
         ? `规格一「${label}」没有 SKU 图片元素。`
         : `规格一「${label}」有图片元素，但当前没有可读取的图片地址。`;
@@ -545,20 +557,44 @@
     return (Array.isArray(rows) ? rows : []).reduce((max, row) => Math.max(max, getPackDimensionValues(row).length), 0);
   }
 
-  function mergeSkuPackInfo(skus, dimensions, packRows, warnings) {
+  function mergeSkuCatalogAndPackInfo(skus, dimensions, skuCatalog, packRows, warnings) {
     if (!Array.isArray(skus)) return [];
     const rows = Array.isArray(packRows) ? packRows : [];
     const labels = Array.isArray(dimensions) ? dimensions : [];
-    const keys = makeDimensionKeys(labels, getPackDimensionCount(rows));
+    const catalog = Array.isArray(skuCatalog) ? skuCatalog.filter((entry) => Array.isArray(entry?.values) && entry.values.length) : [];
+    const catalogDimensionCount = catalog.reduce((max, entry) => Math.max(max, entry.values.length), 0);
+    const keys = makeDimensionKeys(labels, Math.max(getPackDimensionCount(rows), catalogDimensionCount));
     const usedPacks = new Set();
     let unmatchedSkuCount = 0;
-    const merged = skus.map((sku) => {
+    const mainSkuByTuple = new Map();
+    for (const entry of catalog) {
+      if (entry.values.length !== keys.length) continue;
+      const key = skuTupleKey(entry.values);
+      if (!mainSkuByTuple.has(key)) mainSkuByTuple.set(key, entry);
+    }
+
+    const merged = [];
+    const existingByTuple = new Map();
+    for (const sku of skus) {
       const skuValues = { ...(sku.sku_values || {}) };
       const values = keys.map((key) => skuValues[key] || '');
+      const tupleKey = skuTupleKey(values);
+      const hasAllValues = values.length > 0 && values.every(Boolean);
+      const mainSku = hasAllValues ? mainSkuByTuple.get(tupleKey) : null;
+      if (!hasAllValues && mainSkuByTuple.size) continue;
+      if (hasAllValues && existingByTuple.has(tupleKey)) {
+        const previous = existingByTuple.get(tupleKey);
+        previous.price ||= sku.price || null;
+        previous.stock ||= sku.stock || null;
+        continue;
+      }
       const pack = findPackInfoRow(values, rows);
       if (!pack) {
         unmatchedSkuCount += 1;
-        return { ...sku, sku_values: skuValues, sku_id: hasSkuId(sku.sku_id) ? sku.sku_id : null, weight_g: sku.weight_g ?? null };
+        const record = { ...sku, sku_values: skuValues, sku_id: hasSkuId(mainSku?.skuId) ? mainSku.skuId : null, weight_g: sku.weight_g ?? null };
+        merged.push(record);
+        if (hasAllValues) existingByTuple.set(tupleKey, record);
+        continue;
       }
       usedPacks.add(pack);
       const packValues = getPackDimensionValues(pack);
@@ -566,18 +602,43 @@
         if (!skuValues[key] && packValues[index]) skuValues[key] = packValues[index];
       });
       const variant = keys.map((key) => skuValues[key]).filter(Boolean).join(' / ');
-      return {
+      const record = {
         ...sku,
         variant: variant || sku.variant || null,
         sku_values: skuValues,
-        sku_id: hasSkuId(sku.sku_id) ? sku.sku_id : hasSkuId(pack.skuId) ? pack.skuId : null,
+        sku_id: hasSkuId(mainSku?.skuId) ? mainSku.skuId : null,
         weight_g: sku.weight_g !== null && sku.weight_g !== undefined && Number(sku.weight_g) > 0 ? sku.weight_g : pack.weight ?? null,
       };
-    });
+      merged.push(record);
+      if (hasAllValues) existingByTuple.set(tupleKey, record);
+    }
+
+    for (const entry of catalog) {
+      if (entry.values.length !== keys.length || !entry.values.every(Boolean)) continue;
+      const tupleKey = skuTupleKey(entry.values);
+      if (existingByTuple.has(tupleKey)) continue;
+      const skuValues = Object.fromEntries(keys.map((key, index) => [key, cleanText(entry.values[index])]));
+      const pack = findPackInfoRow(entry.values, rows);
+      if (pack) usedPacks.add(pack);
+      merged.push({
+        variant: entry.values.map(cleanText).join(' / '),
+        sku_values: skuValues,
+        price: null,
+        stock: null,
+        sku_id: hasSkuId(entry.skuId) ? entry.skuId : null,
+        weight_g: pack?.weight ?? null,
+      });
+      existingByTuple.set(tupleKey, merged[merged.length - 1]);
+    }
+
     if (unmatchedSkuCount && rows.length) addWarning(warnings, 'sku_pack_unmatched', `${unmatchedSkuCount} 条 SKU 未能与包装信息可靠匹配。`, { count: unmatchedSkuCount });
     const unmatchedPackCount = rows.filter((row) => !usedPacks.has(row)).length;
-    if (unmatchedPackCount && skus.length) addWarning(warnings, 'sku_pack_unmatched', `${unmatchedPackCount} 条包装信息未能与页面 SKU 可靠匹配。`, { count: unmatchedPackCount });
+    if (unmatchedPackCount && merged.length) addWarning(warnings, 'sku_pack_unmatched', `${unmatchedPackCount} 条包装信息未能与页面 SKU 可靠匹配。`, { count: unmatchedPackCount });
     return merged;
+  }
+
+  function skuTupleKey(values) {
+    return values.map(normalizeSkuValue).join('\u0000');
   }
 
   function getBackgroundImageUrl(element) {
@@ -627,7 +688,7 @@
   function buildProductJson(item, skuData, records, warnings, successfulFiles, positionCount, entries) {
     const failed = Object.values(records).flat().filter((record) => record.status === 'failed').length;
     return {
-      schema_version: 3,
+      schema_version: 4,
       source: '1688 detail page',
       source_url: item.sourceUrl,
       offer_id: item.offerId,
@@ -676,7 +737,7 @@
   function normalizePackInfo(rows) {
     if (!Array.isArray(rows)) return null;
     return rows.map((row) => {
-      const value = { ...row, skuId: hasSkuId(row?.skuId) ? row.skuId : null };
+      const { skuId: _skuId, ...value } = row || {};
       for (const key of ['length', 'width', 'height']) {
         const numeric = value[key] === null || value[key] === undefined || value[key] === '' ? NaN : Number(value[key]);
         value[key] = Number.isFinite(numeric) && numeric > 0 ? value[key] : null;
@@ -710,14 +771,13 @@
     if (missingSkuIds) addWarning(warnings, 'sku_id_missing', `${missingSkuIds} 条 SKU 缺少 sku_id。`, { count: missingSkuIds });
     const skuIds = skus.map((sku) => sku.sku_id).filter(hasSkuId).map(String);
     if (new Set(skuIds).size !== skuIds.length) addWarning(warnings, 'sku_id_duplicate', '检测到重复的 sku_id，请人工核对 SKU 映射。');
-    const packMissingIds = packRows.filter((row) => !hasSkuId(row?.skuId)).length;
-    if (packMissingIds) addWarning(warnings, 'sku_pack_id_missing', `${packMissingIds} 条 SKU 包装信息缺少 skuId。`, { count: packMissingIds });
-    if (skus.length !== packRows.length) addWarning(warnings, 'sku_pack_count_mismatch', `SKU 组合 ${skus.length} 条，与包装信息 ${packRows.length} 条数量不一致。`, { sku_count: skus.length, pack_count: packRows.length });
+    const genericPackRow = packRows.length === 1 && getPackDimensionValues(packRows[0]).every((value) => !value);
+    if (skus.length !== packRows.length && !genericPackRow) addWarning(warnings, 'sku_pack_count_mismatch', `SKU 组合 ${skus.length} 条，与包装信息 ${packRows.length} 条数量不一致。`, { sku_count: skus.length, pack_count: packRows.length });
     const invalidDimensionRows = packRows.filter((row) => ['length', 'width', 'height'].some((key) => {
       const numeric = row?.[key] === null || row?.[key] === undefined || row?.[key] === '' ? NaN : Number(row[key]);
       return !Number.isFinite(numeric) || numeric <= 0;
     })).length;
-    if (invalidDimensionRows) addWarning(warnings, 'sku_dimensions_missing', `${invalidDimensionRows} 条 SKU 包装信息的长宽高缺失或为 0。`, { count: invalidDimensionRows });
+    if (invalidDimensionRows) addWarning(warnings, 'sku_pack_dimensions_missing', `${invalidDimensionRows} 条包装信息的长宽高缺失或为 0。`, { count: invalidDimensionRows });
     const sharedImages = new Map();
     for (const record of records.sku) {
       if (record.status !== 'downloaded' || !record.path || !record.sku_label) continue;
@@ -733,7 +793,7 @@
   function buildImageOrderManifest(offerId, records) {
     const groups = ['gallery', 'sku', 'detail'];
     return {
-      schema_version: 1,
+      schema_version: 2,
       offer_id: offerId,
       content_hash_algorithm: 'MD5',
       group_order: groups,

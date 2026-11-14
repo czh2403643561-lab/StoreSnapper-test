@@ -137,6 +137,8 @@ function read1688PageData() {
   const mainPriceData = data?.mainPrice?.fields || data?.mainPrice || {};
   const packData = data?.productPackInfo?.fields || data?.productPackInfo || {};
   const packScale = packData?.pieceWeightScale || {};
+  const productData = data?.Root?.fields?.dataJson || {};
+  const skuModel = productData?.skuModel || {};
   const toImageUrl = (entry) => {
     if (typeof entry === 'string') return entry;
     if (!entry || typeof entry !== 'object') return '';
@@ -172,8 +174,35 @@ function read1688PageData() {
   }).filter(Boolean) : null;
   const saleCount = titleData.saleNum ?? data?.trade?.fields?.saleCount ?? data?.saleCount ?? null;
   const dimensionCount = Number.isInteger(packScale.skuDimensionCount) ? packScale.skuDimensionCount : 12;
-  const skuDimensions = Array.isArray(packScale.columnList)
+  const skuDimensionsFromModel = Array.isArray(skuModel.skuProps)
+    ? skuModel.skuProps.filter((item) => item && typeof item.prop === 'string').slice(0, 12).map((item) => item.prop)
+    : [];
+  const skuDimensionsFromPack = Array.isArray(packScale.columnList)
     ? packScale.columnList.filter((item) => item && typeof item.label === 'string').slice(0, Math.min(dimensionCount, 12)).map((item) => item.label)
+    : [];
+  const skuDimensions = skuDimensionsFromModel.length ? skuDimensionsFromModel : skuDimensionsFromPack;
+  const skuInfoMap = skuModel.skuInfoMap && typeof skuModel.skuInfoMap === 'object' && !Array.isArray(skuModel.skuInfoMap) && Object.keys(skuModel.skuInfoMap).length
+    ? skuModel.skuInfoMap
+    : skuModel.skuInfoMapOriginal || {};
+  const skuCatalog = Object.entries(skuInfoMap).slice(0, 240).map(([rawKey, entry]) => {
+    if (!entry || typeof entry !== 'object') return null;
+    const values = String(rawKey)
+      .replace(/&amp;/gi, '&')
+      .replace(/&gt;|&#0*62;|&#x0*3e;/gi, '>')
+      .split('>')
+      .map((value) => value.trim())
+      .filter(Boolean);
+    const skuId = entry.skuId ?? entry.sku_id ?? null;
+    return values.length ? {
+      values,
+      skuId: (typeof skuId === 'string' || typeof skuId === 'number') && String(skuId).trim() !== '' && String(skuId).trim() !== '0' ? skuId : null,
+    } : null;
+  }).filter(Boolean);
+  const skuFirstDimensionOptions = Array.isArray(skuModel.skuProps?.[0]?.value)
+    ? skuModel.skuProps[0].value.slice(0, 120).map((option) => ({
+      label: typeof option?.name === 'string' ? option.name : '',
+      imageUrl: typeof option?.imageUrl === 'string' ? option.imageUrl : '',
+    })).filter((option) => option.label || option.imageUrl)
     : [];
   const skuPackInfo = Array.isArray(packScale.pieceWeightScaleInfo) ? packScale.pieceWeightScaleInfo.slice(0, 120).map((entry) => {
     if (!entry || typeof entry !== 'object') return null;
@@ -190,8 +219,6 @@ function read1688PageData() {
         value[key] = Number.isFinite(numeric) && numeric > 0 ? field : null;
       }
     }
-    const skuId = entry.skuId;
-    value.skuId = (typeof skuId === 'string' || typeof skuId === 'number') && String(skuId).trim() !== '' && String(skuId).trim() !== '0' ? skuId : null;
     return Object.keys(value).length ? value : null;
   }).filter(Boolean) : null;
   return {
@@ -206,6 +233,8 @@ function read1688PageData() {
     priceTiersSource,
     saleCount: typeof saleCount === 'string' || typeof saleCount === 'number' ? saleCount : null,
     skuDimensions,
+    skuCatalog,
+    skuFirstDimensionOptions,
     skuPackInfo,
   };
 }
