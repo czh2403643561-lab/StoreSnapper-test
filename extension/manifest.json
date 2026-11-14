@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "StoreSnapper · 电商工作台",
-  "version": "0.4.11",
+  "version": "0.4.12",
   "description": "Temu／1688 图片找货与 TikTok Shop 商品管理采集。",
   "icons": {
     "16": "assets/storesnapper-16.png",
@@ -31,6 +31,7 @@
     "https://aimg.kwcdn.com/*",
     "https://*.tiktokcdn-eu.com/*",
     "https://cbu01.alicdn.com/*",
+    "https://itemcdn.tmall.com/*",
     "https://h5api.m.1688.com/*",
     "https://search.1688.com/*",
     "https://air.1688.com/*",
@@ -52,6 +53,11 @@
     {
       "matches": ["https://www.1688.com/*", "https://search.1688.com/*", "https://air.1688.com/*"],
       "js": ["content.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://detail.1688.com/offer/*"],
+      "js": ["vendor/fflate.js", "detail-collector.js"],
       "run_at": "document_idle"
     },
     {

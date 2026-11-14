@@ -23,6 +23,18 @@ const AUTH_FLOW_KEY = 'storesnapper_1688_auth_flow';
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || typeof message.type !== 'string') return false;
+  if (message.type === 'READ_1688_DETAIL_SOURCE') {
+    void read1688DetailSource(sender, message.offerId)
+      .then((result) => sendResponse({ ok: true, result }))
+      .catch((error) => sendResponse({ ok: false, error: error?.message || '无法读取 1688 商品信息。' }));
+    return true;
+  }
+  if (message.type === 'FETCH_1688_DETAIL_FILE') {
+    void fetch1688DetailFile(sender, message.url, message.kind, message.offerId)
+      .then((result) => sendResponse({ ok: true, result }))
+      .catch((error) => sendResponse({ ok: false, error: error?.message || '图片下载失败。' }));
+    return true;
+  }
   if (message.type === 'OPEN_STORE_SIDEPANEL') {
     const tabId = sender.tab?.id;
     if (tabId === undefined || !chrome.sidePanel?.open) {
@@ -99,6 +111,131 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   return false;
 });
+
+async function read1688DetailSource(sender, requestedOfferId) {
+  const offerId = String(requestedOfferId || '');
+  const tab = sender.tab;
+  if (!tab?.id || !/^\d{8,}$/.test(offerId) || !is1688OfferUrl(sender.url, offerId) || !is1688OfferUrl(tab.url, offerId)) {
+    throw new Error('商品页面已变化，请刷新后重试。');
+  }
+  const [injected] = await chrome.scripting.executeScript({
+    target: { tabId: tab.id },
+    world: 'MAIN',
+    func: read1688PageData,
+  });
+  const source = injected?.result;
+  if (!source || source.offerId !== offerId) throw new Error('页面尚未识别到商品信息，请稍后重试。');
+  return source;
+}
+
+function read1688PageData() {
+  const offerId = location.pathname.match(/\/offer\/(\d{8,})\.html/i)?.[1] || '';
+  const data = window.context?.result?.data;
+  const toImageUrl = (entry) => {
+    if (typeof entry === 'string') return entry;
+    if (!entry || typeof entry !== 'object') return '';
+    for (const key of ['originalImageUrl', 'bigImageUrl', 'imageUrl', 'imgUrl', 'url', 'src', 'image']) {
+      if (typeof entry[key] === 'string') return entry[key];
+    }
+    return '';
+  };
+  const galleryItems = data?.gallery?.fields?.offerImgList;
+  const gallery = Array.isArray(galleryItems) ? galleryItems.slice(0, 80).map(toImageUrl).filter(Boolean) : [];
+  const title = document.querySelector('#productTitle')?.innerText?.trim()
+    || data?.title || data?.subject || data?.offerTitle || '';
+  const supplierName = document.querySelector('#shopName, [class*="shopName"], [class*="shop-name"]')?.innerText?.trim()
+    || data?.supplier?.name || data?.supplierName || '';
+  const descriptionUrl = data?.description?.fields?.detailUrl || '';
+  const rawPriceTiers = data?.price?.fields?.priceRangeList || data?.priceRangeList;
+  const priceTiers = Array.isArray(rawPriceTiers) ? rawPriceTiers.slice(0, 100).map((entry) => {
+    if (typeof entry === 'string' || typeof entry === 'number') return String(entry).slice(0, 120);
+    if (!entry || typeof entry !== 'object') return null;
+    const value = {};
+    for (const key of ['price', 'priceText', 'beginAmount', 'minOrderQuantity', 'startAmount', 'quantity']) {
+      const field = entry[key];
+      if (typeof field === 'string' || typeof field === 'number') value[key] = String(field).slice(0, 120);
+    }
+    return Object.keys(value).length ? value : null;
+  }).filter(Boolean) : null;
+  const saleCount = data?.trade?.fields?.saleCount ?? data?.saleCount ?? null;
+  return {
+    offerId,
+    sourceUrl: `${location.origin}${location.pathname}`,
+    title: String(title).slice(0, 500),
+    supplierName: String(supplierName).slice(0, 200),
+    gallery,
+    descriptionUrl: typeof descriptionUrl === 'string' ? descriptionUrl : '',
+    priceTiers: Array.isArray(priceTiers) ? priceTiers.slice(0, 100) : null,
+    saleCount: typeof saleCount === 'string' || typeof saleCount === 'number' ? saleCount : null,
+  };
+}
+
+async function fetch1688DetailFile(sender, rawUrl, kind, requestedOfferId) {
+  const tab = sender.tab;
+  const offerId = String(requestedOfferId || '');
+  if (!tab?.id || !/^\d{8,}$/.test(offerId) || !is1688OfferUrl(sender.url, offerId) || !is1688OfferUrl(tab.url, offerId)) throw new Error('商品页面已变化，请刷新后重试。');
+  if (typeof rawUrl !== 'string' || rawUrl.length > 4096) throw new Error('文件地址无效。');
+  let url;
+  try { url = new URL(rawUrl); } catch { throw new Error('文件地址无效。'); }
+  const allowed = kind === 'detail'
+    ? url.hostname === 'itemcdn.tmall.com'
+    : kind === 'image' && url.hostname === 'cbu01.alicdn.com';
+  if (!allowed || url.protocol !== 'https:' || url.username || url.password || url.port) throw new Error('文件域名未获授权。');
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), kind === 'detail' ? 12000 : 18000);
+  try {
+    const response = await fetch(url.href, {
+      credentials: 'omit',
+      referrerPolicy: 'no-referrer',
+      cache: 'no-store',
+      redirect: 'manual',
+      signal: controller.signal,
+    });
+    if (!response.ok || response.redirected || (response.status >= 300 && response.status < 400)) {
+      throw new Error(`文件请求失败（HTTP ${response.status}）。`);
+    }
+  const limit = kind === 'detail' ? 4 * 1024 * 1024 : 5 * 1024 * 1024;
+    const length = Number(response.headers.get('content-length'));
+    if (Number.isFinite(length) && length > limit) throw new Error('文件超过单文件大小限制。');
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (!bytes.length || bytes.length > limit) throw new Error('文件为空或超过单文件大小限制。');
+    if (kind === 'detail') {
+      const contentType = (response.headers.get('content-type') || '').toLowerCase();
+      if (!/javascript|ecmascript|text\//.test(contentType)) throw new Error('详情内容响应格式不是文本。');
+      return { text: new TextDecoder('utf-8').decode(bytes) };
+    }
+    return {
+      base64: encodeBase64(bytes),
+      contentType: (response.headers.get('content-type') || '').split(';', 1)[0].trim().toLowerCase(),
+      size: bytes.byteLength,
+    };
+  } catch (error) {
+    if (error?.name === 'AbortError') throw new Error('文件请求超时。');
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function encodeBase64(bytes) {
+  const parts = [];
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    parts.push(String.fromCharCode(...bytes.subarray(offset, offset + chunkSize)));
+  }
+  return btoa(parts.join(''));
+}
+
+function is1688OfferUrl(rawUrl, expectedOfferId) {
+  try {
+    const url = new URL(rawUrl);
+    const offerId = url.pathname.match(/^\/offer\/(\d{8,})\.html$/i)?.[1];
+    return url.protocol === 'https:' && url.hostname === 'detail.1688.com'
+      && Boolean(offerId) && (!expectedOfferId || offerId === expectedOfferId);
+  } catch {
+    return false;
+  }
+}
 
 async function open1688Login(originTabId) {
   if (originTabId === undefined) throw new Error('Missing Temu tab');
