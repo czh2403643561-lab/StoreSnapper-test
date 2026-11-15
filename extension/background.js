@@ -11,7 +11,7 @@ import {
   parseSearchResponseText,
   sniffImageFormat,
 } from './core.mjs';
-import { handleDriveExportMessage, handleDriveUploadPort, isDriveExportMessage } from './drive-export.mjs';
+import { clearLegacyDriveData, handleLocalFolderMessage, handleLocalFolderExportPort, isLocalFolderMessage } from './local-folder-export.mjs';
 
 const jobsByTab = new Map();
 const IMAGE_HOSTS = new Set(['img.kwcdn.com', 'img-eu.kwcdn.com', 'aimg.kwcdn.com', 'cbu01.alicdn.com']);
@@ -22,14 +22,15 @@ const MTOP_TOKEN_LOOKUP_TIMEOUT_MS = 10_000;
 const MTOP_TOKEN_LOOKUP_STEP_TIMEOUT_MS = 2_000;
 const AUTH_FLOW_KEY = 'storesnapper_1688_auth_flow';
 
-chrome.runtime.onConnect.addListener(handleDriveUploadPort);
+void clearLegacyDriveData();
+chrome.runtime.onConnect.addListener(handleLocalFolderExportPort);
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || typeof message.type !== 'string') return false;
-  if (isDriveExportMessage(message.type)) {
-    void handleDriveExportMessage(message, sender)
+  if (isLocalFolderMessage(message.type)) {
+    void handleLocalFolderMessage(message, sender)
       .then((result) => sendResponse({ ok: true, result }))
-      .catch((error) => sendResponse({ ok: false, error: error?.message || 'Google Drive 操作失败。' }));
+      .catch((error) => sendResponse({ ok: false, error: error?.message || '无法打开本机文件夹设置。' }));
     return true;
   }
   if (message.type === 'READ_1688_DETAIL_SOURCE') {
