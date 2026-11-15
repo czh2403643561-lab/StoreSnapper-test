@@ -11,6 +11,7 @@ import {
   parseSearchResponseText,
   sniffImageFormat,
 } from './core.mjs';
+import { handleDriveExportMessage, handleDriveUploadPort, isDriveExportMessage } from './drive-export.mjs';
 
 const jobsByTab = new Map();
 const IMAGE_HOSTS = new Set(['img.kwcdn.com', 'img-eu.kwcdn.com', 'aimg.kwcdn.com', 'cbu01.alicdn.com']);
@@ -21,8 +22,16 @@ const MTOP_TOKEN_LOOKUP_TIMEOUT_MS = 10_000;
 const MTOP_TOKEN_LOOKUP_STEP_TIMEOUT_MS = 2_000;
 const AUTH_FLOW_KEY = 'storesnapper_1688_auth_flow';
 
+chrome.runtime.onConnect.addListener(handleDriveUploadPort);
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || typeof message.type !== 'string') return false;
+  if (isDriveExportMessage(message.type)) {
+    void handleDriveExportMessage(message, sender)
+      .then((result) => sendResponse({ ok: true, result }))
+      .catch((error) => sendResponse({ ok: false, error: error?.message || 'Google Drive 操作失败。' }));
+    return true;
+  }
   if (message.type === 'READ_1688_DETAIL_SOURCE') {
     void read1688DetailSource(sender, message.offerId)
       .then((result) => sendResponse({ ok: true, result }))

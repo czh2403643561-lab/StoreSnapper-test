@@ -14,6 +14,9 @@
   let scanGeneration = 0;
   let dragState;
   let suppressMiniClick = false;
+  let exportSettings = { mode: 'local', clientId: '', folderId: '', folderName: '' };
+  let pendingArchive;
+  let pendingFilename = '';
 
   const root = document.createElement('div');
   root.id = 'storesnapper-1688-detail-collector';
@@ -28,8 +31,10 @@
       .head{display:flex;align-items:center;gap:9px;margin-bottom:13px;cursor:move;touch-action:none;user-select:none}
       .brand{display:grid;place-items:center;width:30px;height:30px;border-radius:9px;background:#e8f4ed;color:#1f7655;font-size:16px;font-weight:700}
       .title{flex:1;font-size:15px;font-weight:700}
+      .settings-toggle,.collapse{display:grid;place-items:center;width:30px;height:30px;border:0;border-radius:8px;background:#f3f6f4;color:#52665d;font-size:17px}
+      .settings-toggle:disabled{cursor:default;opacity:.55}
       button{font:inherit;cursor:pointer}
-      .collapse{width:30px;height:30px;border:0;border-radius:8px;background:#f3f6f4;color:#52665d;font-size:19px;line-height:1}
+      .collapse{font-size:19px;line-height:1}
       .status{display:flex;align-items:center;gap:8px;margin-bottom:9px;color:#397354;font-size:13px;font-weight:600}
       .dot{width:8px;height:8px;border-radius:50%;background:#46a16a;flex:none}
       .dot.warn{background:#d49b2f}.dot.error{background:#c44949}.dot.busy{background:#788a80;animation:pulse 1s infinite alternate}
@@ -38,38 +43,104 @@
       .product-title{display:-webkit-box;overflow:hidden;-webkit-box-orient:vertical;-webkit-line-clamp:2;color:#34483f;font-size:12px;line-height:1.5;overflow-wrap:anywhere}
       .id{margin-top:4px;color:#85928b;font-size:11px}
       .counts{margin:0 0 12px;color:#687a70;font-size:11px}
+      .destination{margin:-5px 0 10px;color:#829087;font-size:10px;line-height:1.4;overflow-wrap:anywhere}
       .progress{height:5px;margin:0 0 9px;overflow:hidden;border-radius:99px;background:#e8eeea}
       .bar{height:100%;width:0;background:#31835d;transition:width .18s ease}
       .message{min-height:17px;margin:0 0 11px;color:#718077;font-size:11px;line-height:1.5}
       .message.error{color:#a73737}.message.warn{color:#996e13}
       .primary{width:100%;height:39px;border:0;border-radius:9px;background:#247d58;color:#fff;font-size:13px;font-weight:700}
       .primary:hover:not(:disabled){background:#1b6848}.primary:disabled{cursor:wait;opacity:.55}
+      .local-fallback{width:100%;height:34px;margin-top:8px;border:1px solid #dce8e1;border-radius:8px;background:#fff;color:#48645a;font-size:12px}
+      .settings-view[hidden],.main-view[hidden],.local-fallback[hidden]{display:none}
+      .settings-label{display:block;margin:0 0 6px;color:#506258;font-size:12px;font-weight:700}
+      .export-mode,.client-id{width:100%;height:36px;padding:0 9px;border:1px solid #d7e2db;border-radius:8px;background:#fff;color:#20332c;font:inherit;font-size:12px}
+      .setting-block{margin-bottom:14px}
+      .folder-card{margin:9px 0;padding:9px;border-radius:8px;background:#f6f8f7;color:#557065;font-size:12px;line-height:1.5;overflow-wrap:anywhere}
+      .setting-note{margin:8px 0 12px;color:#7a8981;font-size:10px;line-height:1.5}
+      .setting-status{min-height:16px;margin:8px 0;color:#397354;font-size:11px;line-height:1.4}
+      .setting-status.error{color:#a73737}
+      .setting-action{width:100%;min-height:36px;border:1px solid #d7e2db;border-radius:8px;background:#fff;color:#35634e;font-size:12px;font-weight:600}
+      .setting-action.primary-action{border:0;background:#247d58;color:#fff}
+      .setting-action:disabled{opacity:.55;cursor:wait}
+      .setting-link{color:#247d58;font-size:10px;text-decoration:underline}
+      .extension-id{display:block;margin-top:6px;padding:7px;border-radius:7px;background:#f6f8f7;color:#64776e;font:10px/1.4 Consolas,monospace;overflow-wrap:anywhere;user-select:text}
       .mini{position:absolute;left:0;top:0;display:grid;place-items:center;width:48px;height:48px;border:1px solid #cfe2d6;border-radius:50%;background:#fff;color:#1f7655;box-shadow:0 4px 18px rgba(14,39,29,.2);font-size:18px;font-weight:700;pointer-events:auto;cursor:move;touch-action:none;user-select:none}
     </style>
     <section class="panel" role="region" aria-label="1688 商品采集">
-      <header class="head" tabindex="0" aria-label="拖动移动面板，可使用方向键调整位置" title="拖动移动；方向键可微调"><span class="brand" aria-hidden="true">S</span><span class="title">1688 商品采集</span><button class="collapse" type="button" aria-label="收起面板" title="收起">−</button></header>
-      <div class="status"><span class="dot busy"></span><span class="status-text">正在识别商品…</span></div>
-      <div class="product"><div class="product-title"></div><div class="id"></div></div>
-      <div class="counts"></div>
-      <div class="progress" aria-hidden="true"><div class="bar"></div></div>
-      <p class="message" aria-live="polite"></p>
-      <button class="primary" type="button" disabled>正在识别…</button>
+      <header class="head" tabindex="0" aria-label="拖动移动面板，可使用方向键调整位置" title="拖动移动；方向键可微调"><span class="brand" aria-hidden="true">S</span><span class="title">1688 商品采集</span><button class="settings-toggle" type="button" aria-label="导出位置设置" title="导出位置设置">⚙</button><button class="collapse" type="button" aria-label="收起面板" title="收起">−</button></header>
+      <div class="main-view">
+        <div class="status"><span class="dot busy"></span><span class="status-text">正在识别商品…</span></div>
+        <div class="product"><div class="product-title"></div><div class="id"></div></div>
+        <div class="counts"></div>
+        <div class="destination"></div>
+        <div class="progress" aria-hidden="true"><div class="bar"></div></div>
+        <p class="message" aria-live="polite"></p>
+        <button class="primary" type="button" disabled>正在识别…</button>
+        <button class="local-fallback" type="button" hidden>下载这份 ZIP 到本机</button>
+      </div>
+      <div class="settings-view" hidden>
+        <div class="setting-block">
+          <label class="settings-label" for="storesnapper-export-mode">导出位置</label>
+          <select id="storesnapper-export-mode" class="export-mode">
+            <option value="local">本机下载</option>
+            <option value="drive">Google Drive 文件夹</option>
+          </select>
+        </div>
+        <div class="drive-settings" hidden>
+          <div class="setting-block">
+            <label class="settings-label" for="storesnapper-drive-client-id">Google OAuth 客户端 ID</label>
+            <input id="storesnapper-drive-client-id" class="client-id" type="text" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="...apps.googleusercontent.com">
+          </div>
+          <div class="setting-block">
+            <span class="settings-label">创建 OAuth 客户端时填入这个扩展 ID</span>
+            <code class="extension-id"></code>
+          </div>
+          <div class="folder-card">已选文件夹：<span class="folder-name">尚未绑定</span></div>
+          <button class="setting-action primary-action connect-drive" type="button">连接并选择文件夹</button>
+          <button class="setting-action disconnect-drive" type="button" style="margin-top:7px">解除文件夹绑定</button>
+          <p class="setting-note">首次使用需在 Google Cloud 创建 Chrome 扩展 OAuth 客户端，并启用 Google Drive API 与 Picker API。插件只请求访问你选中的文件夹。</p>
+          <a class="setting-link" href="https://console.cloud.google.com/apis/dashboard" target="_blank" rel="noopener noreferrer">打开 Google Cloud 设置</a>
+        </div>
+        <p class="setting-status" aria-live="polite"></p>
+        <button class="setting-action back-to-collector" type="button" style="margin-top:12px">返回采集</button>
+      </div>
     </section>
     <button class="mini" type="button" aria-label="展开 1688 商品采集" title="展开" hidden>S</button>`;
   document.documentElement.append(root);
   panel = shadow.querySelector('.panel');
   view = {
+    headerTitle: shadow.querySelector('.head .title'),
     dot: shadow.querySelector('.dot'),
     status: shadow.querySelector('.status-text'),
     title: shadow.querySelector('.product-title'),
     id: shadow.querySelector('.id'),
     counts: shadow.querySelector('.counts'),
+    destination: shadow.querySelector('.destination'),
     bar: shadow.querySelector('.bar'),
     message: shadow.querySelector('.message'),
     button: shadow.querySelector('.primary'),
+    fallback: shadow.querySelector('.local-fallback'),
     mini: shadow.querySelector('.mini'),
+    main: shadow.querySelector('.main-view'),
+    settings: shadow.querySelector('.settings-view'),
+    settingsToggle: shadow.querySelector('.settings-toggle'),
+    exportMode: shadow.querySelector('.export-mode'),
+    driveSettings: shadow.querySelector('.drive-settings'),
+    clientId: shadow.querySelector('.client-id'),
+    extensionId: shadow.querySelector('.extension-id'),
+    folderName: shadow.querySelector('.folder-name'),
+    settingsStatus: shadow.querySelector('.setting-status'),
+    connectDrive: shadow.querySelector('.connect-drive'),
+    disconnectDrive: shadow.querySelector('.disconnect-drive'),
   };
+  view.extensionId.textContent = chrome.runtime.id || '当前扩展 ID 不可用';
   shadow.querySelector('.collapse').addEventListener('click', () => setCollapsed(true));
+  view.settingsToggle.addEventListener('click', () => void toggleSettings());
+  shadow.querySelector('.back-to-collector').addEventListener('click', () => showSettings(false));
+  view.exportMode.addEventListener('change', () => void saveExportMode());
+  view.connectDrive.addEventListener('click', () => void connectDriveFolder());
+  view.disconnectDrive.addEventListener('click', () => void disconnectDriveFolder());
+  view.fallback.addEventListener('click', () => savePendingArchiveLocally());
   view.mini.addEventListener('click', (event) => {
     if (suppressMiniClick) {
       event.preventDefault();
@@ -82,9 +153,14 @@
   installPanelPosition();
   view.button.addEventListener('click', () => {
     if (busy) return;
+    if (pendingArchive) {
+      void retryPendingArchive();
+      return;
+    }
     if (!source) void recognize();
     else void collectAndDownload();
   });
+  void loadExportSettings();
   void recognize();
 
   window.addEventListener('popstate', checkRoute);
@@ -113,6 +189,115 @@
     setUi({ phase: 'failed', message: '暂未读取到商品信息，可稍后重试。', percent: 0 });
   }
 
+  async function toggleSettings() {
+    const opening = view.settings.hidden;
+    showSettings(opening);
+    if (opening) await loadExportSettings();
+  }
+
+  function showSettings(open) {
+    view.main.hidden = open;
+    view.settings.hidden = !open;
+    view.headerTitle.textContent = open ? '导出位置设置' : '1688 商品采集';
+    view.settingsToggle.setAttribute('aria-label', open ? '返回商品采集' : '导出位置设置');
+    view.settingsToggle.title = open ? '返回商品采集' : '导出位置设置';
+  }
+
+  async function loadExportSettings() {
+    const response = await chrome.runtime.sendMessage({ type: 'STORESNAPPER_1688_EXPORT_SETTINGS_GET' }).catch(() => undefined);
+    if (!response?.ok) return;
+    exportSettings = response.result || exportSettings;
+    view.exportMode.value = exportSettings.mode === 'drive' ? 'drive' : 'local';
+    view.clientId.value = exportSettings.clientId || '';
+    view.folderName.textContent = exportSettings.folderName || '尚未绑定';
+    view.driveSettings.hidden = exportSettings.mode !== 'drive';
+    updateDestinationLabel();
+  }
+
+  async function saveExportMode() {
+    const mode = view.exportMode.value === 'drive' ? 'drive' : 'local';
+    view.driveSettings.hidden = mode !== 'drive';
+    setSettingsStatus('正在保存…');
+    const response = await chrome.runtime.sendMessage({
+      type: 'STORESNAPPER_1688_EXPORT_SETTINGS_SAVE',
+      mode,
+      clientId: view.clientId.value.trim(),
+    }).catch(() => undefined);
+    if (!response?.ok) {
+      setSettingsStatus(response?.error || '设置保存失败，请重试。', true);
+      return;
+    }
+    exportSettings = response.result;
+    view.folderName.textContent = exportSettings.folderName || '尚未绑定';
+    updateDestinationLabel();
+    setSettingsStatus(mode === 'drive' && !exportSettings.folderId ? '请填写客户端 ID 并选择 Google Drive 文件夹。' : '已保存。');
+  }
+
+  async function connectDriveFolder() {
+    const clientId = view.clientId.value.trim();
+    if (!clientId) {
+      setSettingsStatus('先填写 Google OAuth 客户端 ID。', true);
+      view.clientId.focus();
+      return;
+    }
+    view.connectDrive.disabled = true;
+    view.disconnectDrive.disabled = true;
+    view.exportMode.disabled = true;
+    setSettingsStatus('正在连接 Google Drive，请在弹出的窗口里选择目标文件夹…');
+    try {
+      const saved = await chrome.runtime.sendMessage({
+        type: 'STORESNAPPER_1688_EXPORT_SETTINGS_SAVE',
+        mode: 'drive',
+        clientId,
+      });
+      if (!saved?.ok) throw new Error(saved?.error || '无法保存 Google Drive 设置。');
+      exportSettings = saved.result || exportSettings;
+      view.folderName.textContent = exportSettings.folderName || '尚未绑定';
+      updateDestinationLabel();
+      const response = await chrome.runtime.sendMessage({ type: 'STORESNAPPER_1688_DRIVE_PICK_FOLDER', clientId });
+      if (!response?.ok) throw new Error(response?.error || 'Google Drive 连接失败。');
+      exportSettings = response.result;
+      view.exportMode.value = 'drive';
+      view.folderName.textContent = exportSettings.folderName || '已绑定';
+      view.driveSettings.hidden = false;
+      updateDestinationLabel();
+      setSettingsStatus(`已连接：${exportSettings.folderName || 'Google Drive 文件夹'}`);
+    } catch (error) {
+      setSettingsStatus(error?.message || 'Google Drive 连接失败，请重试。', true);
+    } finally {
+      view.connectDrive.disabled = false;
+      view.disconnectDrive.disabled = false;
+      view.exportMode.disabled = false;
+    }
+  }
+
+  async function disconnectDriveFolder() {
+    view.disconnectDrive.disabled = true;
+    const response = await chrome.runtime.sendMessage({ type: 'STORESNAPPER_1688_DRIVE_DISCONNECT' }).catch(() => undefined);
+    view.disconnectDrive.disabled = false;
+    if (!response?.ok) {
+      setSettingsStatus(response?.error || '解除绑定失败，请重试。', true);
+      return;
+    }
+    exportSettings = response.result;
+    view.exportMode.value = 'local';
+    view.driveSettings.hidden = true;
+    view.folderName.textContent = '尚未绑定';
+    updateDestinationLabel();
+    setSettingsStatus('已解除 Google Drive 文件夹绑定。');
+  }
+
+  function updateDestinationLabel() {
+    view.destination.textContent = exportSettings.mode === 'drive'
+      ? `导出到：Google Drive · ${exportSettings.folderName || '待绑定文件夹'}`
+      : '导出到：本机下载';
+  }
+
+  function setSettingsStatus(message, isError = false) {
+    view.settingsStatus.textContent = message || '';
+    view.settingsStatus.className = `setting-status${isError ? ' error' : ''}`;
+  }
+
   async function collectAndDownload() {
     if (!source || busy || !offerId) return;
     busy = true;
@@ -127,6 +312,12 @@
     setUi({ phase: 'busy', message: '正在读取商品与详情…', percent: 10 });
 
     try {
+      const settingsResponse = await chrome.runtime.sendMessage({ type: 'STORESNAPPER_1688_EXPORT_SETTINGS_GET' }).catch(() => undefined);
+      if (!settingsResponse?.ok) throw new Error(settingsResponse?.error || '无法读取导出位置设置。');
+      exportSettings = settingsResponse.result || exportSettings;
+      if (exportSettings.mode === 'drive' && (!exportSettings.clientId || !exportSettings.folderId)) {
+        throw new Error('先打开设置填写 Google OAuth 客户端 ID 并绑定文件夹，再开始采集。');
+      }
       if (taskOfferId !== getOfferId()) throw new Error('页面商品已变化，请对当前商品重新采集。');
       const detailResult = await readDetailImageUrls();
       if (taskOfferId !== getOfferId()) throw new Error('页面商品已变化，请对当前商品重新采集。');
@@ -241,24 +432,149 @@
       const archive = globalThis.fflate?.zipSync(zipFiles, { level: 1 });
       if (!(archive instanceof Uint8Array) || !archive.length) throw new Error('ZIP 文件生成失败。');
       if (taskOfferId !== getOfferId()) throw new Error('页面商品已变化，未开始下载旧商品 ZIP。');
-      triggerDownload(archive, `StoreSnapper-1688-${taskOfferId}-${formatTimestamp()}.zip`);
+      const filename = `StoreSnapper-1688-${taskOfferId}-${formatTimestamp()}.zip`;
+      let deliveryMessage = 'ZIP 已开始下载';
+      if (exportSettings.mode === 'drive') {
+        if (!exportSettings.folderId) throw new Error('还没有绑定 Google Drive 文件夹，请打开设置完成连接。');
+        pendingArchive = archive;
+        pendingFilename = filename;
+        setUi({ phase: 'uploading', message: '正在上传 ZIP 到 Google Drive…', percent: 91 });
+        await uploadArchiveToDrive(archive, filename, (sent, total) => {
+          const percent = 91 + Math.round(9 * (sent / Math.max(1, total)));
+          setUi({ phase: 'uploading', message: `正在上传 ZIP 到 Google Drive… ${Math.round((sent / Math.max(1, total)) * 100)}%`, percent });
+        });
+        pendingArchive = undefined;
+        pendingFilename = '';
+        view.fallback.hidden = true;
+        deliveryMessage = `ZIP 已上传到 Google Drive「${exportSettings.folderName || '已选文件夹'}」`;
+      } else {
+        pendingArchive = undefined;
+        pendingFilename = '';
+        view.fallback.hidden = true;
+        triggerDownload(archive, filename);
+      }
       if (taskOfferId !== getOfferId()) return;
       const incomplete = failureCount > 0 || warnings.length > 0;
       const detailWarning = firstImageFailure ? `；${firstImageFailure}` : warnings.length ? `；${warnings[0].message}` : '';
       setUi({
         phase: incomplete ? 'partial' : 'done',
-        message: `ZIP 已开始下载：${successes} 张成功${failureCount ? `，${failureCount} 个图片位置未采集` : ''}${detailWarning}。`,
+        message: `${deliveryMessage}：${successes} 张成功${failureCount ? `，${failureCount} 个图片位置未采集` : ''}${detailWarning}。`,
         percent: 100,
         buttonText: '重新采集',
       });
     } catch (error) {
-      if (taskOfferId === getOfferId()) setUi({ phase: 'failed', message: error?.message || '采集失败，请重试。', percent: 0, buttonText: '重试' });
+      if (taskOfferId === getOfferId()) setUi({ phase: 'failed', message: error?.message || '采集失败，请重试。', percent: 0, buttonText: pendingArchive ? '重试上传' : '重试' });
     } finally {
       if (activeTaskId === taskId) {
         activeTaskId = '';
         busy = false;
       }
     }
+  }
+
+  async function retryPendingArchive() {
+    if (!pendingArchive || busy) return;
+    busy = true;
+    const archive = pendingArchive;
+    const filename = pendingFilename;
+    setUi({ phase: 'uploading', message: '正在准备 ZIP…', percent: 90 });
+    try {
+      const response = await chrome.runtime.sendMessage({ type: 'STORESNAPPER_1688_EXPORT_SETTINGS_GET' }).catch(() => undefined);
+      if (!response?.ok) throw new Error(response?.error || '无法读取导出位置设置。');
+      exportSettings = response.result || exportSettings;
+      if (exportSettings.mode === 'drive') {
+        if (!exportSettings.folderId) throw new Error('还没有绑定 Google Drive 文件夹，请先打开设置完成连接。');
+        await uploadArchiveToDrive(archive, filename, (sent, total) => {
+          const percent = 91 + Math.round(9 * (sent / Math.max(1, total)));
+          setUi({ phase: 'uploading', message: `正在上传 ZIP 到 Google Drive… ${Math.round((sent / Math.max(1, total)) * 100)}%`, percent });
+        });
+        pendingArchive = undefined;
+        pendingFilename = '';
+        setUi({ phase: 'done', message: `ZIP 已上传到 Google Drive「${exportSettings.folderName || '已选文件夹'}」。`, percent: 100, buttonText: '重新采集' });
+      } else {
+        triggerDownload(archive, filename);
+        pendingArchive = undefined;
+        pendingFilename = '';
+        setUi({ phase: 'done', message: 'ZIP 已开始下载到本机。', percent: 100, buttonText: '重新采集' });
+      }
+    } catch (error) {
+      setUi({ phase: 'failed', message: error?.message || 'ZIP 交付失败，请重试。', percent: 0, buttonText: '重试上传' });
+    } finally {
+      busy = false;
+    }
+  }
+
+  function savePendingArchiveLocally() {
+    if (!pendingArchive || busy) return;
+    triggerDownload(pendingArchive, pendingFilename);
+    pendingArchive = undefined;
+    pendingFilename = '';
+    setUi({ phase: 'done', message: 'ZIP 已开始下载到本机。', percent: 100, buttonText: '重新采集' });
+  }
+
+  function uploadArchiveToDrive(archive, filename, onProgress) {
+    const archiveOfferId = filename.match(/^StoreSnapper-1688-(\d+)-/i)?.[1] || '';
+    if (!archiveOfferId || archiveOfferId !== getOfferId()) return Promise.reject(new Error('页面商品已变化，请对当前商品重新采集。'));
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      let started = false;
+      let pendingAck;
+      const port = chrome.runtime.connect({ name: 'STORESNAPPER_1688_DRIVE_UPLOAD' });
+      const finish = (error, file) => {
+        if (settled) return;
+        settled = true;
+        pendingAck?.reject(error || new Error('Google Drive 上传已结束。'));
+        try { port.disconnect(); } catch { /* The port may already be closed. */ }
+        if (error) reject(error);
+        else resolve(file);
+      };
+      const sendChunks = async () => {
+        try {
+          for (let offset = 0; offset < archive.byteLength; offset += 1024 * 1024) {
+            const chunk = archive.subarray(offset, Math.min(archive.byteLength, offset + 1024 * 1024));
+            const acknowledged = new Promise((ackResolve, ackReject) => { pendingAck = { resolve: ackResolve, reject: ackReject }; });
+            port.postMessage({ type: 'chunk', offset, data: encodeBase64(chunk) });
+            const nextOffset = await acknowledged;
+            pendingAck = undefined;
+            onProgress?.(nextOffset, archive.byteLength);
+          }
+        } catch (error) {
+          finish(error);
+        }
+      };
+
+      port.onMessage.addListener((message) => {
+        if (message?.type === 'ready') {
+          if (started) return;
+          started = true;
+          void sendChunks();
+        } else if (message?.type === 'chunk_ack') {
+          pendingAck?.resolve(Number(message.offset) || 0);
+          pendingAck = undefined;
+        } else if (message?.type === 'done') {
+          finish(undefined, message.file || {});
+        } else if (message?.type === 'error') {
+          finish(new Error(message.error || 'Google Drive 上传失败。'));
+        }
+      });
+      port.onDisconnect.addListener(() => {
+        if (!settled) finish(new Error(chrome.runtime.lastError?.message || 'Google Drive 上传连接中断。'));
+      });
+
+      try {
+        port.postMessage({ type: 'start', filename, totalBytes: archive.byteLength, offerId: archiveOfferId });
+      } catch (error) {
+        finish(error);
+      }
+    });
+  }
+
+  function encodeBase64(bytes) {
+    let binary = '';
+    for (let offset = 0; offset < bytes.length; offset += 8192) {
+      binary += String.fromCharCode(...bytes.subarray(offset, Math.min(bytes.length, offset + 8192)));
+    }
+    return btoa(binary);
   }
 
   async function readDetailImageUrls() {
@@ -751,6 +1067,7 @@
       detecting: ['正在识别商品…', '正在识别…', 'busy'],
       ready: ['已识别到商品，准备就绪', '采集并打包', ''],
       busy: ['正在采集商品', '采集中…', 'busy'],
+      uploading: ['正在导出商品', pendingArchive ? '重试上传' : '上传中…', 'busy'],
       done: ['采集完成', buttonText || '重新采集', ''],
       partial: ['部分内容未采集', buttonText || '重新采集', 'warn'],
       failed: ['采集遇到问题', buttonText || '重试', 'error'],
@@ -767,7 +1084,9 @@
     view.message.className = `message ${phase === 'failed' ? 'error' : phase === 'partial' ? 'warn' : ''}`.trim();
     view.bar.style.width = `${Math.max(0, Math.min(100, percent || 0))}%`;
     view.button.textContent = label[1];
-    view.button.disabled = busy || phase === 'detecting' || phase === 'busy';
+    view.button.disabled = phase === 'detecting' || phase === 'busy' || phase === 'uploading';
+    view.settingsToggle.disabled = phase === 'busy' || phase === 'uploading';
+    view.fallback.hidden = !pendingArchive || phase !== 'failed';
   }
 
   function setCollapsed(collapsed) {
