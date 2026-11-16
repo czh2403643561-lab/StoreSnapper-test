@@ -51,8 +51,9 @@
       .message.error{color:#a73737}.message.warn{color:#996e13}
       .primary{width:100%;height:39px;border:0;border-radius:9px;background:#247d58;color:#fff;font-size:13px;font-weight:700}
       .primary:hover:not(:disabled){background:#1b6848}.primary:disabled{cursor:wait;opacity:.55}
+      .repair-folder{width:100%;height:36px;margin-top:8px;border:1px solid #dce8e1;border-radius:8px;background:#fff;color:#a04a28;font-size:12px;font-weight:600}
       .local-fallback{width:100%;height:34px;margin-top:8px;border:1px solid #dce8e1;border-radius:8px;background:#fff;color:#48645a;font-size:12px}
-      .settings-view[hidden],.main-view[hidden],.local-fallback[hidden]{display:none}
+      .settings-view[hidden],.main-view[hidden],.local-fallback[hidden],.repair-folder[hidden]{display:none}
       .settings-label{display:block;margin:0 0 6px;color:#506258;font-size:12px;font-weight:700}
       .export-mode{width:100%;height:36px;padding:0 9px;border:1px solid #d7e2db;border-radius:8px;background:#fff;color:#20332c;font:inherit;font-size:12px}
       .setting-block{margin-bottom:14px}
@@ -75,6 +76,7 @@
         <div class="progress" aria-hidden="true"><div class="bar"></div></div>
         <p class="message" aria-live="polite"></p>
         <button class="primary" type="button" disabled>正在识别…</button>
+        <button class="repair-folder" type="button" hidden>恢复文件夹写入权限</button>
         <button class="local-fallback" type="button" hidden>下载这份 ZIP 到本机</button>
       </div>
       <div class="settings-view" hidden>
@@ -88,6 +90,7 @@
         <div class="folder-settings">
           <div class="folder-card">当前文件夹：<span class="folder-name">尚未选择</span></div>
           <button class="setting-action primary-action choose-folder" type="button">选择或更改文件夹</button>
+          <button class="setting-action restore-folder" type="button" style="margin-top:7px" hidden>恢复文件夹写入权限</button>
           <p class="setting-note">可以直接选 Google Drive for Desktop 的共享文件夹；插件写入 ZIP 后由 Google Drive 自动同步。</p>
         </div>
         <p class="setting-status" aria-live="polite"></p>
@@ -108,6 +111,7 @@
     bar: shadow.querySelector('.bar'),
     message: shadow.querySelector('.message'),
     button: shadow.querySelector('.primary'),
+    repairFolder: shadow.querySelector('.repair-folder'),
     fallback: shadow.querySelector('.local-fallback'),
     mini: shadow.querySelector('.mini'),
     main: shadow.querySelector('.main-view'),
@@ -115,6 +119,7 @@
     settingsToggle: shadow.querySelector('.settings-toggle'),
     exportMode: shadow.querySelector('.export-mode'),
     folderName: shadow.querySelector('.folder-name'),
+    restoreFolder: shadow.querySelector('.restore-folder'),
     settingsStatus: shadow.querySelector('.setting-status'),
   };
   shadow.querySelector('.collapse').addEventListener('click', () => setCollapsed(true));
@@ -122,6 +127,8 @@
   shadow.querySelector('.back-to-collector').addEventListener('click', () => showSettings(false));
   view.exportMode.addEventListener('change', () => void saveExportMode());
   shadow.querySelector('.choose-folder').addEventListener('click', () => void openFolderSettings());
+  view.restoreFolder.addEventListener('click', () => void openFolderSettings(true));
+  view.repairFolder.addEventListener('click', () => void openFolderSettings(true));
   view.fallback.addEventListener('click', () => savePendingArchiveLocally());
   view.mini.addEventListener('click', (event) => {
     if (suppressMiniClick) {
@@ -201,6 +208,7 @@
     }
     view.exportMode.value = exportSettings.mode;
     view.folderName.textContent = exportSettings.folderName || '尚未选择';
+    view.restoreFolder.hidden = !exportSettings.folderName;
     updateDestinationLabel();
   }
 
@@ -218,14 +226,19 @@
     setSettingsStatus('已保存。');
   }
 
-  async function openFolderSettings() {
-    setSettingsStatus('正在打开文件夹选择…');
+  async function openFolderSettings(repairPermission = false) {
+    setSettingsStatus(repairPermission ? '正在打开文件夹权限恢复页面…' : '正在打开文件夹选择…');
     const response = await chrome.runtime.sendMessage({ type: 'STORESNAPPER_1688_OPEN_FOLDER_SETTINGS' }).catch(() => undefined);
     if (!response?.ok) {
       setSettingsStatus(response?.error || '无法打开文件夹选择，请重试。', true);
       return;
     }
-    setSettingsStatus('在打开的页面点击“选择本机文件夹”，选好后回到这里即可。');
+    if (repairPermission && !view.main.hidden) {
+      view.message.textContent = '请在新页面点击“恢复此文件夹的访问权限”，再返回这里点“重试保存”。';
+    }
+    setSettingsStatus(repairPermission
+      ? '在打开的页面点击“恢复此文件夹的访问权限”，完成后回到这里重试。'
+      : '在打开的页面点击“选择本机文件夹”，选好后回到这里即可。');
   }
 
   function updateDestinationLabel() {
@@ -1021,6 +1034,7 @@
     view.button.textContent = label[1];
     view.button.disabled = phase === 'detecting' || phase === 'busy' || phase === 'uploading';
     view.settingsToggle.disabled = phase === 'busy' || phase === 'uploading';
+    view.repairFolder.hidden = phase !== 'failed' || !String(message || '').includes('重新确认此文件夹的写入权限');
     view.fallback.hidden = !pendingArchive || phase !== 'failed';
   }
 
