@@ -355,7 +355,10 @@
       catch (error) { selectorState = { ...selectorState, selectionMessage: error.message }; await showTikTok(selectorState); }
     });
     stop.disabled = !state.selecting && !state.canPause;
-    actions.append(start, pause, next, stop);
+    const exportButton = actionButton('下载商品列表', '', () => sendTikTokAction('export'));
+    exportButton.disabled = !state.canExport;
+    exportButton.classList.add('wide');
+    actions.append(start, pause, next, stop, exportButton);
     stepTwo.append(actions);
     const reason = !state.activeTaskId ? '先导入并选择一份清单。'
       : state.selectionPending ? '本页有商品未确认勾选，请先重新处理本页。'
