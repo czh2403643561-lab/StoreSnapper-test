@@ -46,6 +46,7 @@ main{padding:12px}
 .collector-actions .action{width:100%}
 .collector-actions .wide{grid-column:1/-1}
 .selector-box{margin-bottom:8px;padding:10px;border:1px solid #dce8e1;border-radius:9px;background:#fff}.selector-box p{margin:5px 0 9px;color:#52645b;line-height:1.5}.selector-box input[type=file]{width:100%;margin:7px 0}.selector-box button{margin:3px 5px 3px 0;padding:7px 10px;border:1px solid #cfddd5;border-radius:7px;background:#fff;color:#205b48}.selector-box button.primary{background:#087e78;color:#fff}.selector-box button:disabled{opacity:.5}.selector-message{margin:9px 0;padding:8px;background:#f3f7f4;border-radius:7px;overflow-wrap:anywhere}.step-title{margin:0 0 8px;color:#25473b;font-size:13px}
+.task-list{display:grid;gap:5px;max-height:170px;overflow:auto}.task-row{display:flex;min-width:0;gap:5px;padding:3px;border:1px solid #e0e8e3;border-radius:8px}.task-row.active{border-color:#83bea8;background:#eff8f3}.selector-box .task-choose{flex:1;min-width:0;overflow:hidden;margin:0;text-align:left;text-overflow:ellipsis;white-space:nowrap}.selector-box .task-remove{flex:none;margin:0;color:#8b4e42}
 .hint{margin:9px 1px 0;color:#687873;font-size:11px}
 details{margin-top:11px;padding-top:8px;border-top:1px solid #e4ebe8}
 summary{cursor:pointer;color:#53625d;font-weight:700}

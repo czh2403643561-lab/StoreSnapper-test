@@ -301,60 +301,78 @@
     content.append(h('section', 'feature-head', 'TikTok 按 ID 勾选'));
     if (!state.recognized) { renderUnsupported('尚未识别到商品管理标题和商品表格。'); return; }
     const stepOne = h('section', 'selector-box');
-    stepOne.append(h('h2', 'step-title', '① 采集商品索引'));
+    stepOne.append(h('h2', 'step-title', '① 导入本轮清单'));
+    const template = h('button', '', '下载清单模板');
+    template.addEventListener('click', downloadTikTokTemplate);
+    const file = h('input'); file.type = 'file'; file.accept = '.csv,.xlsx'; file.multiple = true;
+    file.disabled = state.selecting || state.canPause;
+    file.addEventListener('change', () => void importSelectorFiles([...file.files]));
+    stepOne.append(template, h('p', 'hint', '可一次选择多份 CSV / XLSX，每份是一轮独立任务。'), file);
+    const taskList = h('div', 'task-list');
+    for (const task of state.tasks || []) {
+      const row = h('div', `task-row${task.id === state.activeTaskId ? ' active' : ''}`);
+      const choose = h('button', 'task-choose', `${task.id === state.activeTaskId ? '● ' : '○ '}${task.name} · ${task.count} 件${state.indexReady ? ` · 索引匹配 ${task.matched}` : ''}${task.duplicates ? ` · 重复 ${task.duplicates}` : ''}`);
+      choose.disabled = state.selecting || state.canPause;
+      choose.addEventListener('click', () => void updateSelectorTask('activate_task', task.id));
+      const remove = h('button', 'task-remove', '移除');
+      remove.disabled = state.selecting || state.canPause;
+      remove.addEventListener('click', () => void updateSelectorTask('remove_task', task.id));
+      row.append(choose, remove); taskList.append(row);
+    }
+    if (!state.tasks?.length) taskList.append(h('p', 'hint', '尚未导入清单。'));
+    stepOne.append(taskList);
+    content.append(stepOne);
+
+    const stepTwo = h('section', 'selector-box');
+    stepTwo.append(h('h2', 'step-title', '② 采集并勾选当前页'));
     const status = h('div', 'collector-status', state.indexReady
-      ? `可复用已有索引：${state.cumulative}/${state.totalRows || state.cumulative} 件`
-      : state.countChanged ? '商品数量或每页数量已变化，请回第 1 页重新采集。'
-        : `采集进度：${state.status || '待命'}`);
+      ? `已有索引 ${state.cumulative}/${state.totalRows || state.cumulative} 件，优先按记录定位`
+      : state.pageIndexReady ? '当前页已有索引，可直接按记录定位'
+      : state.countChanged ? '商品列表已变化，需要更新索引'
+        : `索引进度：${state.status || '待命'}`);
     status.dataset.kind = state.statusCode || 'idle';
-    stepOne.append(status);
+    stepTwo.append(status);
     const metrics = h('div', 'metrics');
     const cells = [
       ['当前页 / 总页数', `${state.page ?? '—'} / ${state.totalPages ?? '—'}`],
       ['本页 / 预计商品', `${state.pageCount ?? 0} / ${state.expected ?? '—'}`],
       ['已采集 / 列表商品', `${state.cumulative ?? 0} / ${state.totalRows ?? '—'}`],
-      ['当前页核对', state.currentPageMatches ? '通过' : '待核对'],
+      ['本页清单商品', state.pageIndexReady ? state.pageMatches ?? 0 : '采集时识别'],
     ];
     for (const [label, value] of cells) {
       const metric = h('div', 'metric'); metric.append(h('span', '', label), h('strong', '', value)); metrics.append(metric);
     }
-    stepOne.append(metrics);
+    stepTwo.append(metrics);
     const actions = h('div', 'collector-actions');
-    const start = actionButton(state.startLabel || '采集当前页', 'primary', () => sendTikTokAction('start'));
-    start.disabled = !state.canStart || state.selecting;
+    const start = actionButton(state.pageIndexReady ? '处理当前页' : '开始本轮：采集并勾选', 'primary', () => sendTikTokAction('run'));
+    start.disabled = !state.activeTaskId || !state.canStart || state.selecting || state.canPause;
     const pause = actionButton(state.paused ? '继续' : '暂停', '', () => sendTikTokAction('pause'));
     pause.disabled = !state.canPause;
-    const next = actionButton(state.nextLabel || '采集下一页', '', () => sendTikTokAction('next'));
-    next.disabled = !state.canNext;
-    actions.append(start, pause, next);
-    stepOne.append(actions, h('p', 'hint', state.indexReady
-      ? state.currentPageMatches ? '索引已就绪，无需重新采集；勾选前仍会核对本页全部 ID。'
-        : '当前页与记录暂不一致，请等待页面加载或点“重新检查本页”。'
-      : state.countChanged ? '旧索引不会用于勾选。回到第 1 页后点击“重新检查本页”。'
-        : '逐页采集商品 ID；完成后即可导入清单。'));
-    content.append(stepOne);
-
-    const stepTwo = h('section', 'selector-box');
-    stepTwo.append(h('h2', 'step-title', '② 导入商品 ID 清单'));
-    const template = h('button', '', '下载清单模板');
-    template.addEventListener('click', downloadTikTokTemplate);
-    const file = h('input'); file.type = 'file'; file.accept = '.csv,.xlsx'; file.disabled = !state.indexReady || state.selecting;
-    file.addEventListener('change', () => void importSelectorFile(file.files?.[0]));
-    stepTwo.append(h('p', '', `清单 ${state.targets || 0} 件 · 索引中匹配 ${state.matchedTargets || 0} 件`), template,
-      h('p', 'hint', '支持 CSV / XLSX；只读取“商品ID”列。'), file);
-    if (!state.indexReady) stepTwo.append(h('p', 'hint', '请先完成上方的商品索引。'));
+    const next = actionButton('下一页并继续', '', () => sendTikTokAction('next'));
+    next.disabled = !state.canNext || !state.canContinue || state.selecting;
+    const stop = actionButton('停止本轮', '', async () => {
+      try { await selectorAction('stop'); await showTikTok(selectorState); }
+      catch (error) { selectorState = { ...selectorState, selectionMessage: error.message }; await showTikTok(selectorState); }
+    });
+    stop.disabled = !state.selecting && !state.canPause;
+    actions.append(start, pause, next, stop);
+    stepTwo.append(actions);
+    const reason = !state.activeTaskId ? '先导入并选择一份清单。'
+      : state.selectionPending ? '本页有商品未确认勾选，请先重新处理本页。'
+      : state.countChanged && state.page !== 1 ? '商品数量已变化，请先切回第 1 页更新索引。'
+        : state.selecting || state.canPause ? '正在运行，可暂停或停止。'
+          : state.canNext && !state.canContinue ? '先处理当前页，再决定是否进入下一页。'
+          : !state.canStart ? '当前页仍在加载，或页码尚未识别。'
+            : state.pageIndexReady ? '优先定位本页清单商品；找不到或页面变化时才重采本页。'
+              : '采集经过目标商品时会当场勾选，不再重新扫一遍。';
+    stepTwo.append(h('p', 'hint', reason));
     content.append(stepTwo);
 
     const stepThree = h('section', 'selector-box');
-    stepThree.append(h('h2', 'step-title', '③ 勾选当前页'));
-    const feedback = h('p', 'selector-message', state.selectionMessage || (state.indexReady ? '可导入清单并开始勾选。' : '等待商品索引完成。'));
-    const select = h('button', 'primary', '勾选当前页（最多 30 件）');
-    select.disabled = !state.indexReady || !state.currentPageMatches || !state.targets || state.selecting || state.canPause;
-    select.addEventListener('click', () => void runSelector('select', { limit: 30 }));
-    const stop = h('button', '', '停止'); stop.disabled = !state.selecting;
-    stop.addEventListener('click', () => void selectorAction('stop'));
-    stepThree.append(feedback, select, stop);
-    if (state.selected?.length) stepThree.append(h('p', '', `本轮已勾选 ${state.selected.length} 件，请在后台核对。`));
+    stepThree.append(h('h2', 'step-title', '③ 本页结果'));
+    const feedback = h('p', 'selector-message', state.selectionMessage || '选择清单后开始本轮。');
+    stepThree.append(feedback);
+    if (state.selected?.length) stepThree.append(h('p', '', `本页新勾选 ${state.selected.length} 件，请在后台核对。`));
     stepThree.append(h('p', 'hint', '插件只勾选商品；下架、删除和确认由你操作。'));
     content.append(stepThree);
 
@@ -398,33 +416,33 @@
     const a = h('a'); a.href = url; a.download = 'TikTok-商品ID模板.xlsx'; document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 60_000);
   }
 
-  async function runSelector(action, extra = {}) {
-    try {
-      selectorState = { ...(selectorState || {}), selecting: true, selectionMessage: '正在核对并勾选…' };
-      const status = content.querySelector('.selector-message'); if (status) status.textContent = selectorState.selectionMessage;
-      content.querySelectorAll('.selector-box button,.selector-box input').forEach((control) => { if (control.textContent !== '停止') control.disabled = true; });
-      await selectorAction(action, extra);
-    }
-    catch (error) { selectorState = { ...(selectorState || {}), selecting: false, selectionMessage: error.message }; }
+  async function updateSelectorTask(action, id) {
+    try { await selectorAction(action, { id }); }
+    catch (error) { selectorState = { ...selectorState, selectionMessage: error.message }; }
     await showTikTok(selectorState);
   }
 
-  async function importSelectorFile(file) {
-    if (!file) return;
+  async function importSelectorFiles(files) {
+    if (!files.length) return;
     try {
       const { parseCsv, parseXlsx } = await import('./batch-core.mjs');
-      const xlsx = file.name.toLowerCase().endsWith('.xlsx');
-      if (!xlsx && !file.name.toLowerCase().endsWith('.csv')) throw new Error('请选择 CSV 或 XLSX 文件。');
-      const table = xlsx ? parseXlsx(await file.arrayBuffer(), globalThis.fflate?.unzipSync, { includeCellTypes: true }) : parseCsv(await file.text());
-      const headers = table[0]?.map((cell) => String(cell || '').trim().toLowerCase()) || [];
-      const column = headers.findIndex((value) => ['商品id', 'product_id', 'product id'].includes(value));
-      if (column < 0) throw new Error('找不到“商品ID”列。');
-      if (xlsx && table.slice(1).some((row) => row[column] && !['s', 'inlineStr', 'str'].includes(row.cellTypes?.[column]))) throw new Error('商品 ID 列含数字单元格；请先设为纯文本，避免长 ID 被四舍五入。');
-      const ids = table.slice(1).map((row) => String(row[column] || '').trim()).filter(Boolean);
-      if (!ids.length || ids.some((id) => !/^\d{16,22}$/.test(id))) throw new Error('商品 ID 必须是完整的纯数字文字；请检查科学计数法或小数。');
-      await selectorAction('import', { ids });
+      const tasks = [];
+      for (const file of files) {
+        const xlsx = file.name.toLowerCase().endsWith('.xlsx');
+        if (!xlsx && !file.name.toLowerCase().endsWith('.csv')) throw new Error(`${file.name}：请选择 CSV 或 XLSX 文件。`);
+        const table = xlsx ? parseXlsx(await file.arrayBuffer(), globalThis.fflate?.unzipSync, { includeCellTypes: true }) : parseCsv(await file.text());
+        const headers = table[0]?.map((cell) => String(cell || '').trim().toLowerCase()) || [];
+        const column = headers.findIndex((value) => ['商品id', 'product_id', 'product id'].includes(value));
+        if (column < 0) throw new Error(`${file.name}：找不到“商品ID”列。`);
+        if (xlsx && table.slice(1).some((row) => row[column] && !['s', 'inlineStr', 'str'].includes(row.cellTypes?.[column]))) {
+          throw new Error(`${file.name}：商品 ID 列含数字单元格，请改成纯文本。`);
+        }
+        const ids = table.slice(1).map((row) => String(row[column] || '').trim()).filter(Boolean);
+        if (!ids.length || ids.some((id) => !/^\d{16,22}$/.test(id))) throw new Error(`${file.name}：商品 ID 必须是完整的纯数字文字。`);
+        tasks.push({ name: file.name, ids });
+      }
+      await selectorAction('import_tasks', { tasks });
       await showTikTok(selectorState);
-      if (selectorState.indexReady && selectorState.currentPageMatches) await runSelector('select', { limit: 30 });
     } catch (error) { selectorState = { ...(selectorState || {}), selectionMessage: error.message || '导入失败。' }; await showTikTok(selectorState); }
   }
 
