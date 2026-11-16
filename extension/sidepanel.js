@@ -10,9 +10,7 @@
   let stateRevision = 0;
   let recentSaveQueue = Promise.resolve();
   let tiktokLogsOpen = false;
-  let selectorMode = false;
   let selectorState = null;
-  let selectorAutoIndexTab = null;
   let authReady = false;
   let authChecking = false;
   let authFlow = null;
@@ -294,40 +292,72 @@
   }
 
   async function showTikTok(state) {
-    if (selectorMode) { await showTikTokSelector(); return; }
     activeMode = 'tiktok';
+    selectorState = state;
     document.body.classList.add('collector-mode');
     contextLabel.textContent = 'TikTok';
     document.body.classList.remove('compact');
     content.replaceChildren();
-    content.append(h('section', 'feature-head', 'TikTok 商品管理采集'));
-    content.append(tiktokModeTabs());
+    content.append(h('section', 'feature-head', 'TikTok 按 ID 勾选'));
     if (!state.recognized) { renderUnsupported('尚未识别到商品管理标题和商品表格。'); return; }
-    const status = h('div', 'collector-status', `状态：${state.status || '待命'}`);
+    const stepOne = h('section', 'selector-box');
+    stepOne.append(h('h2', 'step-title', '① 采集商品索引'));
+    const status = h('div', 'collector-status', state.indexReady
+      ? `可复用已有索引：${state.cumulative}/${state.totalRows || state.cumulative} 件`
+      : state.countChanged ? '商品数量或每页数量已变化，请回第 1 页重新采集。'
+        : `采集进度：${state.status || '待命'}`);
     status.dataset.kind = state.statusCode || 'idle';
-    content.append(status);
+    stepOne.append(status);
     const metrics = h('div', 'metrics');
     const cells = [
       ['当前页 / 总页数', `${state.page ?? '—'} / ${state.totalPages ?? '—'}`],
       ['本页 / 预计商品', `${state.pageCount ?? 0} / ${state.expected ?? '—'}`],
-      ['已采集商品', state.cumulative ?? 0],
-      ['筛选范围', state.filterLabel || '当前列表'],
+      ['已采集 / 列表商品', `${state.cumulative ?? 0} / ${state.totalRows ?? '—'}`],
+      ['当前页核对', state.currentPageMatches ? '通过' : '待核对'],
     ];
     for (const [label, value] of cells) {
       const metric = h('div', 'metric'); metric.append(h('span', '', label), h('strong', '', value)); metrics.append(metric);
     }
-    content.append(metrics);
+    stepOne.append(metrics);
     const actions = h('div', 'collector-actions');
-    const start = actionButton(state.startLabel || '开始采集本页', 'primary', () => sendTikTokAction('start'));
-    start.disabled = !state.canStart;
+    const start = actionButton(state.startLabel || '采集当前页', 'primary', () => sendTikTokAction('start'));
+    start.disabled = !state.canStart || state.selecting;
     const pause = actionButton(state.paused ? '继续' : '暂停', '', () => sendTikTokAction('pause'));
     pause.disabled = !state.canPause;
     const next = actionButton(state.nextLabel || '采集下一页', '', () => sendTikTokAction('next'));
     next.disabled = !state.canNext;
-    const exportButton = actionButton('导出 JSON', '', () => sendTikTokAction('export'));
-    exportButton.disabled = !state.canExport;
-    actions.append(start, pause, next, exportButton);
-    content.append(actions, h('p', 'hint', state.hint || '翻页由你手动确认；采集不会自动连续翻页。'));
+    actions.append(start, pause, next);
+    stepOne.append(actions, h('p', 'hint', state.indexReady
+      ? state.currentPageMatches ? '索引已就绪，无需重新采集；勾选前仍会核对本页全部 ID。'
+        : '当前页与记录暂不一致，请等待页面加载或点“重新检查本页”。'
+      : state.countChanged ? '旧索引不会用于勾选。回到第 1 页后点击“重新检查本页”。'
+        : '逐页采集商品 ID；完成后即可导入清单。'));
+    content.append(stepOne);
+
+    const stepTwo = h('section', 'selector-box');
+    stepTwo.append(h('h2', 'step-title', '② 导入商品 ID 清单'));
+    const template = h('button', '', '下载清单模板');
+    template.addEventListener('click', downloadTikTokTemplate);
+    const file = h('input'); file.type = 'file'; file.accept = '.csv,.xlsx'; file.disabled = !state.indexReady || state.selecting;
+    file.addEventListener('change', () => void importSelectorFile(file.files?.[0]));
+    stepTwo.append(h('p', '', `清单 ${state.targets || 0} 件 · 索引中匹配 ${state.matchedTargets || 0} 件`), template,
+      h('p', 'hint', '支持 CSV / XLSX；只读取“商品ID”列。'), file);
+    if (!state.indexReady) stepTwo.append(h('p', 'hint', '请先完成上方的商品索引。'));
+    content.append(stepTwo);
+
+    const stepThree = h('section', 'selector-box');
+    stepThree.append(h('h2', 'step-title', '③ 勾选当前页'));
+    const feedback = h('p', 'selector-message', state.selectionMessage || (state.indexReady ? '可导入清单并开始勾选。' : '等待商品索引完成。'));
+    const select = h('button', 'primary', '勾选当前页（最多 30 件）');
+    select.disabled = !state.indexReady || !state.currentPageMatches || !state.targets || state.selecting || state.canPause;
+    select.addEventListener('click', () => void runSelector('select', { limit: 30 }));
+    const stop = h('button', '', '停止'); stop.disabled = !state.selecting;
+    stop.addEventListener('click', () => void selectorAction('stop'));
+    stepThree.append(feedback, select, stop);
+    if (state.selected?.length) stepThree.append(h('p', '', `本轮已勾选 ${state.selected.length} 件，请在后台核对。`));
+    stepThree.append(h('p', 'hint', '插件只勾选商品；下架、删除和确认由你操作。'));
+    content.append(stepThree);
+
     const details = h('details');
     details.open = tiktokLogsOpen;
     details.addEventListener('toggle', () => { tiktokLogsOpen = details.open; });
@@ -345,55 +375,12 @@
     content.append(details);
   }
 
-  function tiktokModeTabs() {
-    const tabs = h('div', 'selector-tabs');
-    for (const [label, selected] of [['商品采集', false], ['按 ID 勾选', true]]) {
-      const button = h('button', selectorMode === selected ? 'active' : '', label);
-      button.type = 'button';
-      button.addEventListener('click', () => { selectorMode = selected; if (selected) void showTikTokSelector(); else if (selectorState?.collector) void showTikTok(selectorState.collector); else void refresh(); });
-      tabs.append(button);
-    }
-    return tabs;
-  }
-
   async function selectorAction(action, extra = {}) {
     if (!activeTabId) return null;
     const response = await chrome.tabs.sendMessage(activeTabId, { type: 'TIKTOK_SELECT_ACTION', action, ...extra });
     if (!response?.ok) throw new Error(response?.error || '页面操作失败。');
-    selectorState = { ...(selectorState || {}), ...response.state };
+    selectorState = response.state;
     return response.state;
-  }
-
-  async function showTikTokSelector() {
-    activeMode = 'tiktok'; selectorMode = true;
-    document.body.classList.add('collector-mode');
-    contextLabel.textContent = 'TikTok';
-    try { selectorState = { ...(selectorState || {}), ...(await selectorAction('get')) }; }
-    catch { selectorState = { message: '页面脚本不可用，请刷新商品管理页。' }; }
-    content.replaceChildren(h('section', 'feature-head', 'TikTok 按 ID 勾选'), tiktokModeTabs());
-    const box = h('section', 'selector-box');
-    const status = h('p', 'selector-message', selectorState.message || '请先建立商品索引。');
-    box.append(status, h('p', '', `在售 ${selectorState.total || '—'} 件 · 索引 ${selectorState.indexed || 0} 件 · 清单 ${selectorState.targets || 0} 件 · 当前第 ${selectorState.page || '—'} 页`));
-    const index = h('button', '', selectorState.cacheValid ? '重新建立索引' : '建立商品索引');
-    index.disabled = selectorState.running || !selectorState.recognized;
-    index.addEventListener('click', () => void runSelector('index'));
-    const template = h('button', '', '下载清单模板');
-    template.addEventListener('click', downloadTikTokTemplate);
-    const file = h('input'); file.type = 'file'; file.accept = '.csv,.xlsx'; file.disabled = selectorState.running;
-    file.addEventListener('change', () => void importSelectorFile(file.files?.[0]));
-    const select = h('button', 'primary', '勾选当前页（最多 30 件）');
-    select.disabled = selectorState.running || !selectorState.recognized || !selectorState.cacheValid || !selectorState.targets;
-    select.addEventListener('click', () => void runSelector('select', { limit: 30 }));
-    const stop = h('button', '', '停止'); stop.disabled = !selectorState.running;
-    stop.addEventListener('click', () => void selectorAction('stop'));
-    box.append(index, template, h('p', '', '支持现有表格导出的 CSV / XLSX，只读取“商品ID”列。'), file, select, stop);
-    if (selectorState.selected?.length) box.append(h('p', '', `本轮已勾选：${selectorState.selected.join('、')}`));
-    box.append(h('p', '', '插件只勾选商品；下架、删除和确认由你在后台操作。'));
-    content.append(box);
-    if (selectorState.recognized && selectorState.indexed && !selectorState.cacheValid && selectorState.total && !selectorState.running && selectorAutoIndexTab !== activeTabId) {
-      selectorAutoIndexTab = activeTabId;
-      setTimeout(() => void runSelector('index'), 0);
-    }
   }
 
   function downloadTikTokTemplate() {
@@ -413,13 +400,13 @@
 
   async function runSelector(action, extra = {}) {
     try {
-      selectorState = { ...(selectorState || {}), running: true, message: action === 'index' ? '正在读取商品 ID…' : '正在核对并勾选…' };
-      const status = content.querySelector('.selector-message'); if (status) status.textContent = selectorState.message;
+      selectorState = { ...(selectorState || {}), selecting: true, selectionMessage: '正在核对并勾选…' };
+      const status = content.querySelector('.selector-message'); if (status) status.textContent = selectorState.selectionMessage;
       content.querySelectorAll('.selector-box button,.selector-box input').forEach((control) => { if (control.textContent !== '停止') control.disabled = true; });
       await selectorAction(action, extra);
     }
-    catch (error) { selectorState = { ...(selectorState || {}), running: false, message: error.message }; }
-    await showTikTokSelector();
+    catch (error) { selectorState = { ...(selectorState || {}), selecting: false, selectionMessage: error.message }; }
+    await showTikTok(selectorState);
   }
 
   async function importSelectorFile(file) {
@@ -436,9 +423,9 @@
       const ids = table.slice(1).map((row) => String(row[column] || '').trim()).filter(Boolean);
       if (!ids.length || ids.some((id) => !/^\d{16,22}$/.test(id))) throw new Error('商品 ID 必须是完整的纯数字文字；请检查科学计数法或小数。');
       await selectorAction('import', { ids });
-      await showTikTokSelector();
-      if (selectorState.cacheValid) await runSelector('select', { limit: 30 });
-    } catch (error) { selectorState = { ...(selectorState || {}), message: error.message || '导入失败。' }; await showTikTokSelector(); }
+      await showTikTok(selectorState);
+      if (selectorState.indexReady && selectorState.currentPageMatches) await runSelector('select', { limit: 30 });
+    } catch (error) { selectorState = { ...(selectorState || {}), selectionMessage: error.message || '导入失败。' }; await showTikTok(selectorState); }
   }
 
   async function sendTikTokAction(action) {
@@ -548,8 +535,7 @@
   chrome.runtime.onMessage.addListener((message, sender) => {
     if (message?.type !== 'STOREPANEL_STATE' || sender.tab?.id !== activeTabId || !message.state) return;
     if (message.mode === 'temu' || message.mode === '1688') void showContentState(message, message.mode);
-    else if (message.mode === 'tiktok') { selectorState = { ...(selectorState || {}), collector: message.state }; if (!selectorMode) void showTikTok(message.state); }
-    else if (message.mode === 'tiktok-select' && selectorMode) { selectorState = { ...(selectorState || {}), ...message.state }; void showTikTokSelector(); }
+    else if (message.mode === 'tiktok') void showTikTok(message.state);
   });
   chrome.tabs.onActivated.addListener(() => void refresh());
   chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {

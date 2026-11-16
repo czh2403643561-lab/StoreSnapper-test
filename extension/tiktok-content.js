@@ -7,6 +7,7 @@
   const Core = window.StoreSnapperTikTokCore;
   if (!Core || !chrome?.storage?.local) return;
   const STORE_KEY = 'storesnapper_tiktok_collection_v1';
+  const TARGET_KEY = 'storesnapper_tiktok_selection_targets_v1';
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const textOf = (element) => (element?.innerText || element?.textContent || '').replace(/\s+/g, ' ').trim();
   const visible = (element) => Boolean(element?.getClientRects?.().length);
@@ -35,6 +36,11 @@
     targetPage: null,
     mutationTimer: 0,
     lastScope: null,
+    targets: [],
+    selected: [],
+    selectionMessage: '',
+    selecting: false,
+    stopSelection: false,
   };
 
   function log(step, message, details = {}) {
@@ -245,7 +251,8 @@
     const key = `storesnapper_tiktok_scope_${snapshot.scopeId}`;
     state.sessionKey = key;
     try {
-      const stored = await chrome.storage.local.get(key);
+      const stored = await chrome.storage.local.get([key, TARGET_KEY, 'storesnapper_tiktok_select_v1']);
+      state.targets = stored[TARGET_KEY] || stored.storesnapper_tiktok_select_v1?.targets || [];
       if (stored[key]) {
         state.session = stored[key];
         restorePanelPreferences(state.session);
@@ -288,6 +295,122 @@
     return state.session.pages.find((page) => Number(page.page_number) === Number(snapshot.paginationState.currentPage));
   }
 
+  function indexReady(snapshot = pageSnapshot()) {
+    const session = state.session;
+    const page = snapshot?.paginationState;
+    return Boolean(session && snapshot && snapshot.scopeId === session.scope_id
+      && page?.totalRows > 0 && page.totalRows === session.total_rows
+      && page.pageSize === session.page_size
+      && Core.isEntireCollectionComplete(session.pages, page.totalPages)
+      && Object.keys(session.products).length === page.totalRows);
+  }
+
+  function selectionRows(snapshot) {
+    const productColumn = snapshot.headers.indexes.product;
+    return [...snapshot.table.querySelectorAll('tbody tr')].map((row) => {
+      const cell = row.cells[productColumn];
+      const id = Core.parseProductIdentity(textOf(cell)).productId;
+      const checkbox = row.querySelector('td.core-table-checkbox label.core-checkbox')
+        || row.cells[0]?.querySelector('label:has(input[type="checkbox"]), input[type="checkbox"]');
+      return id && checkbox ? { id, row, checkbox } : null;
+    }).filter(Boolean);
+  }
+
+  function isChecked(element) {
+    const input = element.matches?.('input[type="checkbox"]') ? element : element.querySelector('input[type="checkbox"]');
+    return Boolean(input?.checked || input?.getAttribute('aria-checked') === 'true'
+      || element.getAttribute('aria-checked') === 'true'
+      || element.classList.contains('core-checkbox-checked')
+      || element.querySelector('.core-checkbox-checked'));
+  }
+
+  async function scanSelectionPage(snapshot, wanted) {
+    const target = detectScrollTarget(snapshot.table);
+    const pageNumber = snapshot.paginationState.currentPage;
+    const expected = snapshot.paginationState.expectedRows;
+    const found = new Set();
+    setScroll(target, 0);
+    await wait(220);
+    for (let step = 0; step < 60; step += 1) {
+      if (state.stopSelection) throw new Error('已停止。');
+      const latest = pageSnapshot();
+      if (!latest || latest.scopeId !== snapshot.scopeId || latest.paginationState.currentPage !== pageNumber
+        || latest.paginationState.totalRows !== snapshot.paginationState.totalRows) throw new Error('页面或筛选条件已变化，未执行勾选。');
+      for (const item of selectionRows(latest)) {
+        found.add(item.id);
+        if (!wanted.has(item.id) && isChecked(item.checkbox)) throw new Error('发现清单外商品已勾选，请先核对页面。');
+      }
+      if (expected && found.size >= expected) break;
+      const position = scrollMetrics(target);
+      if (position.top + position.viewport >= position.height - 4) {
+        await wait(420);
+        for (const item of selectionRows(latest)) found.add(item.id);
+        break;
+      }
+      setScroll(target, Math.min(position.top + Math.max(260, position.viewport * .72), position.height - position.viewport));
+      await wait(260);
+    }
+    if (!expected || found.size !== expected) throw new Error(`本页只识别 ${found.size}/${expected || '—'} 件，未执行勾选。`);
+    return [...found];
+  }
+
+  async function selectCurrentPage(limit) {
+    const snapshot = pageSnapshot();
+    if (!indexReady(snapshot)) throw new Error('商品索引需要采集或更新。');
+    if (!state.targets.length) throw new Error('请先导入商品 ID 清单。');
+    const wanted = new Set(state.targets);
+    const ids = await scanSelectionPage(snapshot, wanted);
+    const recorded = currentPageState(snapshot)?.product_ids || [];
+    if (ids.length !== recorded.length || ids.some((id) => !recorded.includes(id))) {
+      throw new Error('当前页商品与已采集记录不同，请重新检查本页后再勾选。');
+    }
+    const matches = ids.filter((id) => wanted.has(id));
+    if (!matches.length) {
+      state.selectionMessage = '当前页没有清单中的商品。';
+      render();
+      return;
+    }
+    state.selected = [];
+    const visited = new Set();
+    const target = detectScrollTarget(snapshot.table);
+    setScroll(target, 0);
+    await wait(220);
+    for (let step = 0; step < 60 && state.selected.length < limit; step += 1) {
+      if (state.stopSelection) throw new Error('已停止。');
+      const latest = pageSnapshot();
+      if (!indexReady(latest) || latest.paginationState.currentPage !== snapshot.paginationState.currentPage) throw new Error('页面已变化，勾选已停止。');
+      const current = selectionRows(latest);
+      if (current.some((item) => !wanted.has(item.id) && isChecked(item.checkbox))) throw new Error('发现清单外商品已勾选，勾选已停止。');
+      for (const item of current) {
+        if (!wanted.has(item.id) || visited.has(item.id)) continue;
+        visited.add(item.id);
+        if (isChecked(item.checkbox)) continue;
+        item.row.scrollIntoView({ block: 'center' });
+        await wait(80);
+        const live = selectionRows(pageSnapshot()).find((entry) => entry.id === item.id);
+        if (!live) throw new Error(`商品 ${item.id} 滚动后消失，勾选已停止。`);
+        if (!isChecked(live.checkbox)) {
+          live.checkbox.click();
+          await wait(180);
+          if (!isChecked(live.checkbox)) throw new Error(`商品 ${item.id} 的勾选状态未确认，已停止。`);
+          state.selected.push(item.id);
+          state.selectionMessage = `本轮已勾选 ${state.selected.length} 件。`;
+          render();
+        }
+        if (state.selected.length >= limit || state.stopSelection) break;
+      }
+      if (visited.size >= matches.length) break;
+      const position = scrollMetrics(target);
+      if (position.top + position.viewport >= position.height - 4) break;
+      setScroll(target, Math.min(position.top + Math.max(260, position.viewport * .72), position.height - position.viewport));
+      await wait(260);
+    }
+    state.selectionMessage = state.selected.length
+      ? `本轮已勾选 ${state.selected.length} 件，请在后台核对后自行操作。`
+      : '当前页匹配的商品都已勾选，无需重复操作。';
+    render();
+  }
+
   function upsertProducts(products) {
     for (const product of products) {
       const id = product.product_id;
@@ -306,14 +429,15 @@
   function recordPage(snapshot, scan, stablePasses, atBottom, timedOut) {
     const pageNumber = snapshot.paginationState.currentPage;
     const ids = scan.products.map((product) => product.product_id);
+    const previousIds = currentPageState(snapshot)?.product_ids || [];
     const evaluated = Core.evaluatePage({
       expectedRows: snapshot.paginationState.expectedRows,
       productIds: ids,
       atBottom,
       stablePasses,
-      pendingImages: scan.pendingImages,
-      failedImages: scan.failedImages,
-      missingCriticalRecords: Core.countIncompleteProducts(scan.products),
+      pendingImages: 0,
+      failedImages: 0,
+      missingCriticalRecords: 0,
       unidentifiedRows: scan.unidentifiedRows,
       timedOut,
     });
@@ -328,6 +452,8 @@
       reasons: evaluated.reasons,
       scroll: { at_bottom: atBottom, stable_passes: stablePasses, row_count: scan.rowCount },
     });
+    const retainedIds = new Set(state.session.pages.flatMap((page) => page.product_ids || []));
+    for (const id of previousIds) if (!retainedIds.has(id)) delete state.session.products[id];
     state.session.pages.sort((a, b) => Number(a.page_number) - Number(b.page_number));
     state.session.current_page = pageNumber;
     const nativeNext = findNextControl(snapshot.pagination);
@@ -342,15 +468,6 @@
     const status = evaluated.status === 'complete'
       ? (everyPageComplete ? 'all_complete' : 'page_complete')
       : 'needs_review';
-    const missingCounts = new Map();
-    for (const product of scan.products) {
-      for (const field of product.missing_fields || []) missingCounts.set(field, (missingCounts.get(field) || 0) + 1);
-    }
-    if (missingCounts.size) {
-      log('字段', `字段缺失数量：${[...missingCounts.entries()].map(([field, count]) => `${field} ${count} 条`).join('、')}。`);
-    } else {
-      log('字段', '本页采集字段均有值。');
-    }
     setStatus(status, status === 'needs_review'
       ? `本页待检查：${evaluated.reasons.join('；')}`
       : `第 ${pageNumber} 页检查通过，共识别 ${evaluated.uniqueCount} 条商品。`, '核对');
@@ -386,6 +503,20 @@
         restorePanelPreferences(state.session);
       }
     } else ensureSession(snapshot);
+    if (state.session.pages.length && (state.session.total_rows !== snapshot.paginationState.totalRows
+      || state.session.page_size !== snapshot.paginationState.pageSize)) {
+      if (snapshot.paginationState.currentPage !== 1) {
+        state.status = 'needs_review';
+        log('更新', '商品总数或每页数量已变化，请先切回第 1 页，再重新采集索引。');
+        return;
+      }
+      state.session.pages = [];
+      state.session.products = {};
+      state.session.current_page = 1;
+      state.session.total_rows = snapshot.paginationState.totalRows;
+      state.session.page_size = snapshot.paginationState.pageSize;
+      log('更新', '商品总数或每页数量已变化，旧索引已清空，开始重新采集。');
+    }
     if (state.session.current_page && Number(state.session.current_page) !== Number(snapshot.paginationState.currentPage) && !recheck) {
       state.status = 'needs_review';
       log('页码', '页面页码与上次采集记录不同；请重新检查当前页，确认后再继续。', { expected_page: state.session.current_page, actual_page: snapshot.paginationState.currentPage });
@@ -439,16 +570,16 @@
         const metrics = scrollMetrics(scrollTarget);
         atBottom = metrics.top + metrics.viewport >= metrics.height - 4;
         const signature = [...pageMap.keys()].sort().join(',') + `|${scan.rowCount}|${metrics.height}|${atBottom}`;
-        if (signature === previousSignature && atBottom && scan.pendingImages === 0) stablePasses += 1;
+        if (signature === previousSignature && atBottom) stablePasses += 1;
         else stablePasses = 0;
         previousSignature = signature;
         const counted = new Set([...pageMap.keys(), ...(pageExisting?.product_ids || [])]).size;
         state.status = 'collecting';
         render({ pageCount: counted, expected: snapshot.paginationState.expectedRows, pageNumber });
         if (step % 4 === 0) {
-          log('采集', `已识别 ${counted}${snapshot.paginationState.expectedRows ? ` / ${snapshot.paginationState.expectedRows}` : ''} 条商品，正在等待图片和页面内容稳定。`, { page: pageNumber, count: counted });
+          log('采集', `已识别 ${counted}${snapshot.paginationState.expectedRows ? ` / ${snapshot.paginationState.expectedRows}` : ''} 条商品，正在核对本页数量。`, { page: pageNumber, count: counted });
         }
-        if (atBottom && stablePasses >= 2 && scan.pendingImages === 0) {
+        if (atBottom && stablePasses >= 2) {
           const finalScan = rowsFor(scopeCheck.latest.table, scopeCheck.latest.headers, pageNumber, snapshot.filters);
           for (const product of finalScan.products) pageMap.set(product.product_id, product);
           upsertProducts(finalScan.products);
@@ -465,8 +596,7 @@
           if (result.status !== 'needs_review') log('完成', `第 ${pageNumber} 页采集并通过数量核对。`, { page: pageNumber, count: result.uniqueCount });
           break;
         }
-        if (atBottom && scan.pendingImages > 0) await wait(1200);
-        else {
+        {
           const nextTop = Math.min(metrics.top + Math.max(240, Math.floor(metrics.viewport * 0.72)), Math.max(0, metrics.height - metrics.viewport));
           if (nextTop <= metrics.top + 2) await wait(850);
           else { setScroll(scrollTarget, nextTop); await wait(520); }
@@ -634,11 +764,19 @@
     const nativeNextDisabled = nativeNext ? nextControlDisabled(nativeNext) : false;
     const products = state.session?.products || {};
     const scopeMismatch = Boolean(snapshot && state.session && snapshot.scopeId !== state.session.scope_id);
+    const countChanged = Boolean(snapshot && state.session && !scopeMismatch
+      && (snapshot.paginationState.totalRows !== state.session.total_rows
+        || snapshot.paginationState.pageSize !== state.session.page_size));
     const currentPage = page?.currentPage || (scopeMismatch ? null : state.session?.current_page) || '—';
     const activePage = scopeMismatch ? null : state.session?.pages?.find((item) => Number(item.page_number) === Number(currentPage));
     const pageCount = progress.pageCount ?? activePage?.unique_products ?? 0;
     const expected = progress.expected ?? activePage?.expected_products ?? page?.expectedRows;
     const cumulative = Object.keys(products).length;
+    const ready = indexReady(snapshot);
+    const currentIds = activePage?.product_ids || [];
+    const visibleIds = snapshot ? selectionRows(snapshot).map((item) => item.id) : [];
+    const currentPageMatches = Boolean(ready && activePage?.status === 'complete' && visibleIds.length
+      && visibleIds.every((id) => currentIds.includes(id)));
     const statusLabels = {
       idle: '尚未开始', collecting: '采集中', checking: '检查中', paused: '已暂停', interrupted: '上次中断',
       needs_review: '待检查', page_complete: '本页完成', all_complete: '全部完成', paging: '正在翻页', error: '失败',
@@ -664,11 +802,22 @@
       statusCode: scopeMismatch ? 'needs_review' : effectiveStatus,
       page: currentPage,
       totalPages: page?.totalPages ?? state.session?.total_pages ?? null,
+      totalRows: page?.totalRows ?? state.session?.total_rows ?? null,
       pageCount,
       expected: expected ?? null,
       cumulative,
+      indexReady: ready,
+      countChanged,
+      currentPageMatches,
+      targets: state.targets.length,
+      matchedTargets: state.targets.filter((id) => Boolean(products[id])).length,
+      selected: state.selected,
+      selectionMessage: state.selectionMessage,
+      selecting: state.selecting,
       filterLabel: snapshot?.filters?.length ? '已记录' : '当前列表',
-      canStart: !state.running && state.status !== 'paging' && Boolean(snapshot && page?.currentPage && page?.totalRows !== 0),
+      canStart: !state.running && state.status !== 'paging'
+        && Boolean(snapshot && page?.currentPage && page?.totalRows !== 0)
+        && (!countChanged || page.currentPage === 1),
       startLabel: scopeMismatch ? '开始采集本页' : activePage || ['needs_review', 'interrupted', 'error'].includes(state.status) ? '重新检查本页' : '开始采集本页',
       canPause: state.running || state.paused,
       paused: state.paused,
@@ -832,6 +981,44 @@
         button.click();
         sendResponse({ ok: true });
       })().catch(() => sendResponse({ ok: false, error: '无法执行采集操作。' }));
+      return true;
+    }
+    if (message?.type === 'TIKTOK_SELECT_ACTION' && isTargetPage()) {
+      if (message.action === 'stop') {
+        state.stopSelection = true;
+        sendResponse({ ok: true, state: state.panelModel });
+        return false;
+      }
+      if (message.action === 'get') {
+        ensureUi();
+        render();
+        sendResponse({ ok: true, state: state.panelModel });
+        return false;
+      }
+      if (state.selecting || state.running) {
+        sendResponse({ ok: false, error: '当前任务正在运行。' });
+        return false;
+      }
+      void (async () => {
+        if (message.action === 'import') {
+          const ids = message.ids;
+          if (!Array.isArray(ids) || !ids.length || ids.some((id) => !/^\d{16,22}$/.test(id))) throw new Error('商品 ID 清单无效。');
+          state.targets = [...new Set(ids)];
+          state.selected = [];
+          state.selectionMessage = `已导入 ${state.targets.length} 个商品 ID。`;
+          await chrome.storage.local.set({ [TARGET_KEY]: state.targets });
+          render();
+        } else if (message.action === 'select') {
+          state.selecting = true;
+          state.stopSelection = false;
+          state.selectionMessage = '正在核对当前页商品…';
+          render();
+          try { await selectCurrentPage(Math.min(30, Math.max(1, Number(message.limit) || 30))); }
+          catch (error) { state.selectionMessage = safeError(error); }
+          finally { state.selecting = false; render(); }
+        } else throw new Error('未知操作。');
+        sendResponse({ ok: true, state: state.panelModel });
+      })().catch((error) => sendResponse({ ok: false, error: safeError(error) }));
       return true;
     }
     return false;

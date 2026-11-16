@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "StoreSnapper · 电商工作台",
-  "version": "0.4.21",
-  "description": "Temu／1688 图片找货与 TikTok Shop 商品管理采集。",
+  "version": "0.4.22",
+  "description": "Temu／1688 图片找货与 TikTok Shop 按商品 ID 勾选。",
   "icons": {
     "16": "assets/storesnapper-16.png",
     "32": "assets/storesnapper-32.png",
@@ -62,7 +62,7 @@
     },
     {
       "matches": ["https://seller.eu.tiktokshopglobalselling.com/*"],
-      "js": ["tiktok-core.js", "tiktok-content.js", "tiktok-select-content.js"],
+      "js": ["tiktok-core.js", "tiktok-content.js"],
       "run_at": "document_idle"
     }
   ],
