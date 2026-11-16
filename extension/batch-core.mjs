@@ -60,7 +60,7 @@ function columnIndex(reference) {
   return number - 1;
 }
 
-export function parseXlsx(buffer, unzipSync) {
+export function parseXlsx(buffer, unzipSync, options = {}) {
   if (typeof unzipSync !== 'function') throw new Error('Excel 解析组件未加载。');
   const zip = unzipSync(new Uint8Array(buffer));
   const workbook = xmlDocument(zip['xl/workbook.xml'], '工作簿');
@@ -77,14 +77,17 @@ export function parseXlsx(buffer, unzipSync) {
     : [];
   return localElements(sheet, 'row').map((row) => {
     const cells = [];
+    const cellTypes = [];
     for (const cell of localElements(row, 'c')) {
       const position = columnIndex(cell.getAttribute('r') || '');
       if (position < 0 || position > 100) continue;
+      cellTypes[position] = cell.getAttribute('t') || 'n';
       let value = localElements(cell, 'v')[0]?.textContent || '';
       if (cell.getAttribute('t') === 's') value = strings[Number(value)] || '';
       else if (cell.getAttribute('t') === 'inlineStr') value = localElements(cell, 't').map((item) => item.textContent || '').join('');
       cells[position] = value;
     }
+    if (options.includeCellTypes) Object.defineProperty(cells, 'cellTypes', { value: cellTypes });
     return cells;
   }).filter((row) => row.some((cell) => String(cell || '').trim()));
 }

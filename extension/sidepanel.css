@@ -45,6 +45,8 @@ main{padding:12px}
 .collector-actions{display:grid;grid-template-columns:1fr 1fr;gap:7px}
 .collector-actions .action{width:100%}
 .collector-actions .wide{grid-column:1/-1}
+.selector-tabs{display:flex;gap:6px;margin-bottom:9px}.selector-tabs button{flex:1;padding:7px;border:1px solid #cbded7;border-radius:8px;background:#fff;color:#28544e}.selector-tabs button.active{background:#e6f5ef;border-color:#86bfa9;font-weight:700}
+.selector-box{padding:10px;border:1px solid #dce8e1;border-radius:9px;background:#fff}.selector-box p{margin:5px 0 9px;color:#52645b;line-height:1.5}.selector-box input[type=file]{width:100%;margin:7px 0}.selector-box button{margin:3px 5px 3px 0;padding:7px 10px;border:1px solid #cfddd5;border-radius:7px;background:#fff;color:#205b48}.selector-box button.primary{background:#087e78;color:#fff}.selector-box button:disabled{opacity:.5}.selector-message{margin:9px 0;padding:8px;background:#f3f7f4;border-radius:7px;overflow-wrap:anywhere}
 .hint{margin:9px 1px 0;color:#687873;font-size:11px}
 details{margin-top:11px;padding-top:8px;border-top:1px solid #e4ebe8}
 summary{cursor:pointer;color:#53625d;font-weight:700}

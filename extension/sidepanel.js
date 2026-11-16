@@ -10,6 +10,9 @@
   let stateRevision = 0;
   let recentSaveQueue = Promise.resolve();
   let tiktokLogsOpen = false;
+  let selectorMode = false;
+  let selectorState = null;
+  let selectorAutoIndexTab = null;
   let authReady = false;
   let authChecking = false;
   let authFlow = null;
@@ -291,12 +294,14 @@
   }
 
   async function showTikTok(state) {
+    if (selectorMode) { await showTikTokSelector(); return; }
     activeMode = 'tiktok';
     document.body.classList.add('collector-mode');
     contextLabel.textContent = 'TikTok';
     document.body.classList.remove('compact');
     content.replaceChildren();
     content.append(h('section', 'feature-head', 'TikTok 商品管理采集'));
+    content.append(tiktokModeTabs());
     if (!state.recognized) { renderUnsupported('尚未识别到商品管理标题和商品表格。'); return; }
     const status = h('div', 'collector-status', `状态：${state.status || '待命'}`);
     status.dataset.kind = state.statusCode || 'idle';
@@ -338,6 +343,102 @@
     const logs = h('pre', 'logs', (state.logs || []).map((item) => `${(item.at || '').slice(11, 19)} [${item.step || ''}] ${item.message || ''}`).join('\n') || '暂无记录');
     details.append(summary, logActions, logs);
     content.append(details);
+  }
+
+  function tiktokModeTabs() {
+    const tabs = h('div', 'selector-tabs');
+    for (const [label, selected] of [['商品采集', false], ['按 ID 勾选', true]]) {
+      const button = h('button', selectorMode === selected ? 'active' : '', label);
+      button.type = 'button';
+      button.addEventListener('click', () => { selectorMode = selected; if (selected) void showTikTokSelector(); else if (selectorState?.collector) void showTikTok(selectorState.collector); else void refresh(); });
+      tabs.append(button);
+    }
+    return tabs;
+  }
+
+  async function selectorAction(action, extra = {}) {
+    if (!activeTabId) return null;
+    const response = await chrome.tabs.sendMessage(activeTabId, { type: 'TIKTOK_SELECT_ACTION', action, ...extra });
+    if (!response?.ok) throw new Error(response?.error || '页面操作失败。');
+    selectorState = { ...(selectorState || {}), ...response.state };
+    return response.state;
+  }
+
+  async function showTikTokSelector() {
+    activeMode = 'tiktok'; selectorMode = true;
+    document.body.classList.add('collector-mode');
+    contextLabel.textContent = 'TikTok';
+    try { selectorState = { ...(selectorState || {}), ...(await selectorAction('get')) }; }
+    catch { selectorState = { message: '页面脚本不可用，请刷新商品管理页。' }; }
+    content.replaceChildren(h('section', 'feature-head', 'TikTok 按 ID 勾选'), tiktokModeTabs());
+    const box = h('section', 'selector-box');
+    const status = h('p', 'selector-message', selectorState.message || '请先建立商品索引。');
+    box.append(status, h('p', '', `在售 ${selectorState.total || '—'} 件 · 索引 ${selectorState.indexed || 0} 件 · 清单 ${selectorState.targets || 0} 件 · 当前第 ${selectorState.page || '—'} 页`));
+    const index = h('button', '', selectorState.cacheValid ? '重新建立索引' : '建立商品索引');
+    index.disabled = selectorState.running || !selectorState.recognized;
+    index.addEventListener('click', () => void runSelector('index'));
+    const template = h('button', '', '下载清单模板');
+    template.addEventListener('click', downloadTikTokTemplate);
+    const file = h('input'); file.type = 'file'; file.accept = '.csv,.xlsx'; file.disabled = selectorState.running;
+    file.addEventListener('change', () => void importSelectorFile(file.files?.[0]));
+    const select = h('button', 'primary', '勾选当前页（最多 30 件）');
+    select.disabled = selectorState.running || !selectorState.recognized || !selectorState.cacheValid || !selectorState.targets;
+    select.addEventListener('click', () => void runSelector('select', { limit: 30 }));
+    const stop = h('button', '', '停止'); stop.disabled = !selectorState.running;
+    stop.addEventListener('click', () => void selectorAction('stop'));
+    box.append(index, template, h('p', '', '支持现有表格导出的 CSV / XLSX，只读取“商品ID”列。'), file, select, stop);
+    if (selectorState.selected?.length) box.append(h('p', '', `本轮已勾选：${selectorState.selected.join('、')}`));
+    box.append(h('p', '', '插件只勾选商品；下架、删除和确认由你在后台操作。'));
+    content.append(box);
+    if (selectorState.recognized && selectorState.indexed && !selectorState.cacheValid && selectorState.total && !selectorState.running && selectorAutoIndexTab !== activeTabId) {
+      selectorAutoIndexTab = activeTabId;
+      setTimeout(() => void runSelector('index'), 0);
+    }
+  }
+
+  function downloadTikTokTemplate() {
+    const root = 'http://schemas.openxmlformats.org/';
+    const files = {
+      '[Content_Types].xml': `<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>`,
+      '_rels/.rels': `<?xml version="1.0"?><Relationships xmlns="${root}package/2006/relationships"><Relationship Id="rId1" Type="${root}officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`,
+      'xl/workbook.xml': `<?xml version="1.0"?><workbook xmlns="${root}spreadsheetml/2006/main" xmlns:r="${root}officeDocument/2006/relationships"><sheets><sheet name="商品ID清单" sheetId="1" r:id="rId1"/></sheets></workbook>`,
+      'xl/_rels/workbook.xml.rels': `<?xml version="1.0"?><Relationships xmlns="${root}package/2006/relationships"><Relationship Id="rId1" Type="${root}officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="${root}officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`,
+      'xl/styles.xml': `<?xml version="1.0"?><styleSheet xmlns="${root}spreadsheetml/2006/main"><fonts count="1"><font><sz val="11"/><name val="Arial"/></font></fonts><fills count="1"><fill><patternFill patternType="none"/></fill></fills><borders count="1"><border/></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="49" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/></cellXfs></styleSheet>`,
+      'xl/worksheets/sheet1.xml': `<?xml version="1.0"?><worksheet xmlns="${root}spreadsheetml/2006/main"><cols><col min="1" max="1" width="26" customWidth="1" style="1"/></cols><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>商品ID</t></is></c></row></sheetData></worksheet>`,
+    };
+    const bytes = globalThis.fflate.zipSync(Object.fromEntries(Object.entries(files).map(([name, xml]) => [name, globalThis.fflate.strToU8(xml)])));
+    const url = URL.createObjectURL(new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+    const a = h('a'); a.href = url; a.download = 'TikTok-商品ID模板.xlsx'; document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  }
+
+  async function runSelector(action, extra = {}) {
+    try {
+      selectorState = { ...(selectorState || {}), running: true, message: action === 'index' ? '正在读取商品 ID…' : '正在核对并勾选…' };
+      const status = content.querySelector('.selector-message'); if (status) status.textContent = selectorState.message;
+      content.querySelectorAll('.selector-box button,.selector-box input').forEach((control) => { if (control.textContent !== '停止') control.disabled = true; });
+      await selectorAction(action, extra);
+    }
+    catch (error) { selectorState = { ...(selectorState || {}), running: false, message: error.message }; }
+    await showTikTokSelector();
+  }
+
+  async function importSelectorFile(file) {
+    if (!file) return;
+    try {
+      const { parseCsv, parseXlsx } = await import('./batch-core.mjs');
+      const xlsx = file.name.toLowerCase().endsWith('.xlsx');
+      if (!xlsx && !file.name.toLowerCase().endsWith('.csv')) throw new Error('请选择 CSV 或 XLSX 文件。');
+      const table = xlsx ? parseXlsx(await file.arrayBuffer(), globalThis.fflate?.unzipSync, { includeCellTypes: true }) : parseCsv(await file.text());
+      const headers = table[0]?.map((cell) => String(cell || '').trim().toLowerCase()) || [];
+      const column = headers.findIndex((value) => ['商品id', 'product_id', 'product id'].includes(value));
+      if (column < 0) throw new Error('找不到“商品ID”列。');
+      if (xlsx && table.slice(1).some((row) => row[column] && !['s', 'inlineStr', 'str'].includes(row.cellTypes?.[column]))) throw new Error('商品 ID 列含数字单元格；请先设为纯文本，避免长 ID 被四舍五入。');
+      const ids = table.slice(1).map((row) => String(row[column] || '').trim()).filter(Boolean);
+      if (!ids.length || ids.some((id) => !/^\d{16,22}$/.test(id))) throw new Error('商品 ID 必须是完整的纯数字文字；请检查科学计数法或小数。');
+      await selectorAction('import', { ids });
+      await showTikTokSelector();
+      if (selectorState.cacheValid) await runSelector('select', { limit: 30 });
+    } catch (error) { selectorState = { ...(selectorState || {}), message: error.message || '导入失败。' }; await showTikTokSelector(); }
   }
 
   async function sendTikTokAction(action) {
@@ -447,7 +548,8 @@
   chrome.runtime.onMessage.addListener((message, sender) => {
     if (message?.type !== 'STOREPANEL_STATE' || sender.tab?.id !== activeTabId || !message.state) return;
     if (message.mode === 'temu' || message.mode === '1688') void showContentState(message, message.mode);
-    else if (message.mode === 'tiktok') void showTikTok(message.state);
+    else if (message.mode === 'tiktok') { selectorState = { ...(selectorState || {}), collector: message.state }; if (!selectorMode) void showTikTok(message.state); }
+    else if (message.mode === 'tiktok-select' && selectorMode) { selectorState = { ...(selectorState || {}), ...message.state }; void showTikTokSelector(); }
   });
   chrome.tabs.onActivated.addListener(() => void refresh());
   chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
